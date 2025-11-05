@@ -31,6 +31,8 @@ class DashboardApp:
         self.value_labels: Dict[str, tk.Label] = {}
         self.sim_label: tk.Label
         self.after_id: str | None = None
+        self.frame_count = 0
+        self.simulated_mode = False
 
         header = tk.Frame(root, bg=COLORS["bg"])
         header.pack(pady=(20, 10))
@@ -73,20 +75,44 @@ class DashboardApp:
     def start(self) -> None:
         """Hook up the close button and run the first refresh."""
 
-        # protocol() lets us intercept the window manager close button.
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.refresh()
+        self.refresh_dashboard()
 
-    def refresh(self) -> None:
-        """Fetch the latest data, update labels, and schedule the next refresh."""
+    def refresh_dashboard(self) -> None:
+        """Refresh the labels once a second while keeping errors non-fatal."""
+
+        self.frame_count += 1
+        reading: Dict[str, float | int | str]
+        simulated = False
+        error: Exception | None = None
 
         try:
-            reading = get_latest_reading() or {}
-            simulated = False
-        except Exception as error:  # pragma: no cover - defensive log
-            print(f"[GUI] Using simulated data: {error}")
-            reading = generate_fake_reading()
+            latest = get_latest_reading()
+            if not latest:
+                raise ValueError("No reading available from data manager.")
+            reading = latest
+        except Exception as exc:  # pragma: no cover - relies on specific failure
+            error = exc
             simulated = True
+            try:
+                reading = generate_fake_reading()
+            except Exception as fallback_error:  # pragma: no cover - defensive
+                print(f"[GUI] Fake data generator failed: {fallback_error}")
+                reading = {
+                    "rpm": 0,
+                    "vehicle_speed_mph": 0.0,
+                    "coolant_temp_f": 0.0,
+                    "throttle_position_pct": 0.0,
+                }
+        else:
+            reading = dict(reading)
+
+        if simulated and not self.simulated_mode:
+            print(f"[GUI] Switching to simulated mode: {error}")
+        if not simulated and self.simulated_mode:
+            print("[GUI] Live data restored; returning to real readings.")
+
+        self.simulated_mode = simulated
 
         for title, key, fmt in FIELDS:
             raw = reading.get(key, 0) or 0
@@ -96,10 +122,12 @@ class DashboardApp:
                 text = "--"
             self.value_labels[title].configure(text=text)
 
-        self.sim_label.configure(text="(Simulated)" if simulated else "")
-        print(f"[GUI] {time.strftime('%H:%M:%S')} update (simulated={simulated})")
-        # after() asks Tk to call refresh in 1000 ms without blocking the event loop.
-        self.after_id = self.root.after(1000, self.refresh)
+        self.sim_label.configure(text="(Simulated Mode)" if simulated else "")
+        timestamp = time.strftime("%H:%M:%S")
+        print(
+            f"[GUI] Frame {self.frame_count} at {timestamp} (simulated={simulated})"
+        )
+        self.after_id = self.root.after(1000, self.refresh_dashboard)
 
     def stop(self) -> None:
         """Cancel any pending Tk callbacks so shutdown stays quiet."""
@@ -113,7 +141,7 @@ class DashboardApp:
         """Handle the window close event cleanly."""
 
         self.stop()
-        print("[GUI] Dashboard closed; exiting Tkinter loop.")
+        print("Dashboard closed cleanly.")
         self.root.destroy()
 
 

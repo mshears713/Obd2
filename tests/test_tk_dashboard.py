@@ -122,7 +122,7 @@ def test_refresh_updates_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tk_dashboard, "generate_fake_reading", lambda: fake_reading)
 
     try:
-        app.refresh()
+        app.refresh_dashboard()
         assert app.value_labels["RPM"].cget("text") == "2000"
         assert app.value_labels["Speed (mph)"].cget("text") == "55.5"
         assert app.value_labels["Coolant Temp (°F)"].cget("text") == "188.2"
