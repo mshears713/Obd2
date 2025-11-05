@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import signal
 import time
 from dataclasses import dataclass
@@ -69,6 +70,17 @@ def parse_args() -> argparse.Namespace:
         "--debug",
         action="store_true",
         help="Print extra scaffolding logs while experimenting.",
+    )
+    parser.add_argument(
+        "--real",
+        action="store_true",
+        help="Use the real OBD adapter (requires /dev/rfcomm0).",
+    )
+    parser.add_argument(
+        "--real-run",
+        type=int,
+        metavar="COUNT",
+        help="Poll the real adapter COUNT times then exit.",
     )
     return parser.parse_args()
 
@@ -251,6 +263,16 @@ def run_fake_mode(args: argparse.Namespace) -> None:
 def connect_to_obd() -> "obd.OBD | None":
     """Connect to the bluetooth adapter and return the python-OBD handle."""
 
+    device_path = "/dev/rfcomm0"
+
+    if not os.path.exists(device_path):
+        # Field testers often forget to pair the adapter; tell them what to fix.
+        log(
+            LOG_PREFIX_ERROR,
+            f"Bluetooth serial device {device_path} not found. Pair the adapter then retry.",
+        )
+        return None
+
     try:
         try:
             import obd
@@ -258,8 +280,8 @@ def connect_to_obd() -> "obd.OBD | None":
             print("[REAL] python-OBD not available. Skipping real mode.")
             return None
 
-        log(LOG_PREFIX_REAL, "Connecting to OBD-II adapter on /dev/rfcomm0…")
-        connection = obd.OBD("/dev/rfcomm0", fast=False)
+        log(LOG_PREFIX_REAL, f"Connecting to OBD-II adapter on {device_path}…")
+        connection = obd.OBD(device_path, fast=False)
         status = connection.status()
 
         if status == obd.OBDStatus.CAR_CONNECTED:
@@ -272,9 +294,10 @@ def connect_to_obd() -> "obd.OBD | None":
                     supported = len(supported_commands)
                 except TypeError:
                     supported = len(list(supported_commands))
+            log(LOG_PREFIX_REAL, f"Connected to vehicle using protocol {protocol}.")
             log(
                 LOG_PREFIX_REAL,
-                f"Connected (protocol {protocol}; {supported} commands available).",
+                f"Adapter reports {supported} supported command(s).",
             )
             return connection
 
@@ -290,7 +313,7 @@ def connect_to_obd() -> "obd.OBD | None":
                     supported = len(list(supported_commands))
             log(
                 LOG_PREFIX_WARN,
-                "Adapter paired but ignition seems off. Reading may be limited.",
+                "Ignition appears OFF. Turn the key to ON for live sensor data.",
             )
             log(
                 LOG_PREFIX_REAL,
@@ -375,23 +398,43 @@ def read_obd_pids(connection: "obd.OBD | None") -> Dict[str, float | int | str]:
     return reading
 
 
-def run_real_mode(args: argparse.Namespace) -> None:
-    """Poll real hardware until shutdown is requested."""
+def run_real_mode(args: argparse.Namespace, *, max_cycles: Optional[int] = None) -> None:
+    """Poll real hardware until shutdown is requested or the limit is reached."""
 
-    log(LOG_PREFIX_REAL, "Starting real OBD-II capture loop.")
+    log(
+        LOG_PREFIX_REAL,
+        "===== Real hardware session starting. Keep the vehicle parked safely. =====",
+    )
+
+    if max_cycles is not None and max_cycles <= 0:
+        log(LOG_PREFIX_WARN, "--real-run COUNT must be greater than zero.")
+        log(LOG_PREFIX_REAL, "===== Real hardware session finished =====")
+        return
 
     connection = connect_to_obd()
     if connection is None:
         log(LOG_PREFIX_ERROR, "No OBD connection available; aborting real mode.")
+        log(LOG_PREFIX_REAL, "===== Real hardware session finished =====")
         return
+
+    csv_path = os.path.abspath(CSV_FILENAME)
+    consecutive_none = 0
+    none_warning_issued = False
+    engine_off_notified = False
+    cycles_completed = 0
 
     try:
         with CsvLogger() as csv_logger:
+            csv_path = os.path.abspath(csv_logger.filename)
             while not shutdown_requested():
+                if max_cycles is not None and cycles_completed >= max_cycles:
+                    break
+
                 start = time.time()
                 try:
                     reading = read_obd_pids(connection)
                 except Exception as exc:
+                    # Leave a clear trail when hardware momentarily drops out.
                     log(LOG_PREFIX_WARN, f"Read failed: {exc}; attempting reconnect.")
                     connection = reconnect_obd(connection)
                     if connection is None:
@@ -400,19 +443,55 @@ def run_real_mode(args: argparse.Namespace) -> None:
                             "Reconnect failed; waiting before next attempt.",
                         )
                         time.sleep(2)
+                    # Protect the bus from tight loops on repeated failures.
+                    elapsed = time.time() - start
+                    remaining = 1.0 - elapsed
+                    if remaining > 0:
+                        time.sleep(remaining)
                     continue
 
                 csv_logger.write(reading)
                 log(LOG_PREFIX_REAL, format_reading(reading))
 
+                sensor_values = [
+                    reading.get("rpm"),
+                    reading.get("coolant_temp_f"),
+                    reading.get("vehicle_speed_mph"),
+                    reading.get("throttle_position_pct"),
+                ]
+                if all(value is None for value in sensor_values):
+                    consecutive_none += 1
+                    if consecutive_none >= 5 and not none_warning_issued:
+                        log(
+                            LOG_PREFIX_WARN,
+                            "No sensor data for five polls. Check ignition and wiring.",
+                        )
+                        none_warning_issued = True
+                else:
+                    consecutive_none = 0
+                    none_warning_issued = False
+                    if not engine_off_notified and reading.get("rpm") == 0:
+                        # Remind the driver to start the engine when ignition is on.
+                        log(
+                            LOG_PREFIX_WARN,
+                            "Engine appears OFF (RPM is 0). Start the engine for live RPM.",
+                        )
+                        engine_off_notified = True
+
+                cycles_completed += 1
+
                 elapsed = time.time() - start
-                if elapsed < 1:
-                    time.sleep(1 - elapsed)
+                remaining = 1.0 - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
     finally:
         try:
             connection.close()
         except Exception:  # pragma: no cover - defensive cleanup
             pass
+
+    log(LOG_PREFIX_REAL, f"Real mode finished. Data saved to {csv_path}.")
+    log(LOG_PREFIX_REAL, "===== Real hardware session finished =====")
 
 
 def main() -> None:
@@ -452,6 +531,22 @@ def main() -> None:
                 LOG_PREFIX_WARN,
                 "--print-sample requires fake data until hardware support is added.",
             )
+
+        if args.real_run is not None:
+            log(
+                LOG_PREFIX_REAL,
+                f"Switching to hardware for {args.real_run} captured reading(s).",
+            )
+            run_real_mode(args, max_cycles=args.real_run)
+            return
+
+        if args.real:
+            log(
+                LOG_PREFIX_REAL,
+                "Switching to hardware scaffolding. Real adapter requested via --real.",
+            )
+            run_real_mode(args)
+            return
 
         log(
             LOG_PREFIX_REAL,
