@@ -6,7 +6,12 @@ import argparse
 import math
 import time
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Dict, Optional
+
+# TODO (tomorrow):
+# - Import python-OBD and open a Bluetooth serial connection automatically.
+# - Add a reconnect loop that keeps trying when the adapter momentarily drops.
+# - Replace NotImplementedError with real PID queries feeding read_obd_pids().
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,6 +131,53 @@ def run_fake_mode(args: argparse.Namespace) -> None:
         log("fake", "Fake mode ready. Use --print-sample to view a reading.")
 
 
+def connect_to_obd() -> Optional[object]:
+    """Return a python-OBD connection object once the library is wired up."""
+
+    # Tomorrow we will import python-OBD here, detect available Bluetooth serial
+    # ports, and call obd.OBD() to open the best match. Until then we simply
+    # return None so the rest of the flow can be written and logged.
+    log("real", "connect_to_obd() placeholder called; no hardware actions taken.")
+    return None
+
+
+def read_obd_pids(connection: Optional[object]) -> Dict[str, float | int | str]:
+    """Read key PIDs from an OBD-II connection once a real library is wired."""
+
+    # Tomorrow's logic will look like:
+    # 1. Use connection.query(obd.commands.RPM) and other PID commands.
+    # 2. Convert the returned Unit types into plain numbers.
+    # 3. Return the values in the same shape as generate_fake_reading().
+    # For now we simply raise NotImplementedError so our control flow knows this
+    # branch is unfinished, but callers can catch it and continue running.
+    raise NotImplementedError("Real PID reading arrives tomorrow.")
+
+
+def run_real_mode(args: argparse.Namespace) -> None:
+    """Placeholder real hardware flow that will be completed tomorrow."""
+
+    # All real hardware runs will come through this function. By separating it
+    # out, we can grow reconnect logic and error handling without cluttering the
+    # fake path that beginners use for quick experiments.
+    log("real", "Attempting hardware mode setup (design scaffold only).")
+
+    try:
+        connection = connect_to_obd()
+        # TODO: Add reconnect loop here once bluetooth/python-OBD is wired up.
+        reading = read_obd_pids(connection)
+        log("real", format_reading(reading))
+    except NotImplementedError:
+        log(
+            "real",
+            "Real OBD-II support lands tomorrow. Tonight only scaffolding runs.",
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging for tomorrow
+        # When the full implementation lands we will reconnect instead of
+        # exiting. Keeping the placeholder log ensures the control flow is
+        # visible today without touching serial ports.
+        log("ERROR", f"Unexpected error in real mode scaffold: {exc}")
+
+
 def main() -> None:
     """Script entry point used by both manual runs and CI."""
 
@@ -149,10 +201,11 @@ def main() -> None:
     if args.print_sample:
         log("WARN", "--print-sample requires fake data until hardware support is added.")
 
-    # When the real Bluetooth / python-OBD integration lands, this is where we
-    # will connect to the vehicle. The fake helpers above were built to make the
-    # transition painless by keeping the logging format consistent.
-    log("WARN", "Hardware mode not implemented yet. Try again with --fake.")
+    log(
+        "real",
+        "Switching to hardware scaffolding. No bluetooth/python-OBD actions tonight.",
+    )
+    run_real_mode(args)
 
 
 if __name__ == "__main__":
