@@ -30,3 +30,31 @@ jobs:
       - name: Run short fake loop
         run: |
           python main.py --fake-run 3
+
+      - name: CSV integrity check
+        run: |
+          python - <<'PY'
+          import csv
+          from pathlib import Path
+
+          path = Path("obd_readings.csv")
+          if not path.exists():
+              raise SystemExit("CSV file missing: obd_readings.csv")
+
+          with path.open(newline="", encoding="utf-8") as handle:
+              rows = list(csv.reader(handle))
+
+          if not rows:
+              raise SystemExit("CSV file is empty")
+
+          header = rows[0]
+          if not header:
+              raise SystemExit("CSV header row missing")
+
+          if len(rows) - 1 < 3:
+              raise SystemExit("CSV does not contain at least 3 readings")
+          PY
+
+      - name: Graceful shutdown simulation
+        run: |
+          python main.py --fake-run 5 --debug

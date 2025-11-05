@@ -25,6 +25,13 @@ The command above runs a tiny self-test and shows a single simulated reading.
 - `connect_to_obd()` and `read_obd_pids()` are placeholders that describe how
   python-OBD and Bluetooth discovery will plug in.
 
+## Shutdown & Reconnect system
+- Banner logs wrap startup/shutdown so Ctrl-C testing is obvious.
+- `handle_sigint()` sets a shutdown flag and lets the app finish gracefully.
+- `CsvLogger` writes `obd_readings.csv` with auto headers and clean closes.
+- `reconnect_obd()` is a TODO stub that fake mode already exercises.
+- Fake runs simulate a reconnect log every few cycles without raising errors.
+
 ## Next steps
 - Tomorrow: import python-OBD, auto-detect the Bluetooth adapter, and start a
   reconnect loop that feeds `read_obd_pids()`.
