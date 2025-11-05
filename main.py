@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import obd
 import csv
 import math
 import signal
@@ -177,19 +178,18 @@ def handle_sigint(signum, frame) -> None:
     raise KeyboardInterrupt
 
 
-def reconnect_obd(connection: Optional[object]) -> Optional[object]:
-    """Return a fresh OBD-II connection.
+def reconnect_obd(connection: Optional[obd.OBD]) -> Optional[obd.OBD]:
+    """Close the old handle, wait briefly, and return a fresh connection."""
 
-    TODO: Tomorrow we will close the stale handle, wait briefly, and call
-    python-OBD to reconnect automatically. The fake mode already exercises this
-    hook so the control flow is ready when real hardware arrives.
-    """
+    try:
+        if connection is not None:
+            connection.close()
+    except Exception as exc:  # pragma: no cover - defensive cleanup
+        log(LOG_PREFIX_WARN, f"Problem while closing OBD connection: {exc}")
 
-    log(
-        LOG_PREFIX_REAL,
-        "reconnect_obd() placeholder invoked; waiting for tomorrow's hardware hooks.",
-    )
-    return connection
+    log(LOG_PREFIX_REAL, "Reconnecting to OBD-II adapter after short pause.")
+    time.sleep(2)
+    return connect_to_obd()
 
 
 def run_fake_cycles(count: int, csv_logger: CsvLogger | None = None) -> None:
@@ -245,54 +245,160 @@ def run_fake_mode(args: argparse.Namespace) -> None:
         )
 
 
-def connect_to_obd() -> Optional[object]:
-    """Return a python-OBD connection object once the library is wired up."""
+def connect_to_obd() -> Optional[obd.OBD]:
+    """Connect to the bluetooth adapter and return the python-OBD handle."""
 
-    # Tomorrow we will import python-OBD here, detect available Bluetooth serial
-    # ports, and call obd.OBD() to open the best match. Until then we simply
-    # return None so the rest of the flow can be written and logged.
-    log(
-        LOG_PREFIX_REAL,
-        "connect_to_obd() placeholder called; no hardware actions taken.",
-    )
+    try:
+        log(LOG_PREFIX_REAL, "Connecting to OBD-II adapter on /dev/rfcomm0…")
+        connection = obd.OBD("/dev/rfcomm0", fast=False)
+        status = connection.status()
+
+        if status == obd.OBDStatus.CAR_CONNECTED:
+            protocol = connection.protocol_name() or "unknown"
+            supported_commands = connection.supported_commands
+            if supported_commands is None:
+                supported = 0
+            else:
+                try:
+                    supported = len(supported_commands)
+                except TypeError:
+                    supported = len(list(supported_commands))
+            log(
+                LOG_PREFIX_REAL,
+                f"Connected (protocol {protocol}; {supported} commands available).",
+            )
+            return connection
+
+        if status == obd.OBDStatus.ELM_CONNECTED:
+            protocol = connection.protocol_name() or "unknown"
+            supported_commands = connection.supported_commands
+            if supported_commands is None:
+                supported = 0
+            else:
+                try:
+                    supported = len(supported_commands)
+                except TypeError:
+                    supported = len(list(supported_commands))
+            log(
+                LOG_PREFIX_WARN,
+                "Adapter paired but ignition seems off. Reading may be limited.",
+            )
+            log(
+                LOG_PREFIX_REAL,
+                f"ELM ready (protocol {protocol}; {supported} commands available).",
+            )
+            return connection
+
+        log(
+            LOG_PREFIX_ERROR,
+            f"Unable to talk to vehicle (status: {status.name if status else status}).",
+        )
+    except Exception as exc:
+        log(LOG_PREFIX_ERROR, f"Failed to connect to OBD adapter: {exc}")
+
     return None
 
 
-def read_obd_pids(connection: Optional[object]) -> Dict[str, float | int | str]:
-    """Read key PIDs from an OBD-II connection once a real library is wired."""
+def read_obd_pids(connection: Optional[obd.OBD]) -> Dict[str, float | int | str]:
+    """Query a handful of PIDs and return them in CSV-friendly form."""
 
-    # Tomorrow's logic will look like:
-    # 1. Use connection.query(obd.commands.RPM) and other PID commands.
-    # 2. Convert the returned Unit types into plain numbers.
-    # 3. Return the values in the same shape as generate_fake_reading().
-    # For now we simply raise NotImplementedError so our control flow knows this
-    # branch is unfinished, but callers can catch it and continue running.
-    raise NotImplementedError("Real PID reading arrives tomorrow.")
+    if connection is None:
+        raise ValueError("No OBD connection available.")
+
+    def safe_query(command):
+        try:
+            response = connection.query(command)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            log(LOG_PREFIX_WARN, f"PID query {command.name} failed: {exc}")
+            return None
+        if response is None or response.is_null():
+            return None
+        return response.value
+
+    rpm_value = safe_query(obd.commands.RPM)
+    speed_value = safe_query(obd.commands.SPEED)
+    coolant_value = safe_query(obd.commands.COOLANT_TEMP)
+    throttle_value = safe_query(obd.commands.THROTTLE_POS)
+
+    def extract_magnitude(value, unit: str | None = None) -> Optional[float]:
+        if value is None:
+            return None
+        converted = value
+        if unit is not None and hasattr(value, "to"):
+            try:
+                converted = value.to(unit)
+            except Exception:
+                converted = value
+        magnitude = getattr(converted, "magnitude", None)
+        if magnitude is None:
+            try:
+                magnitude = float(converted)
+            except (TypeError, ValueError):
+                return None
+        return magnitude
+
+    rpm_magnitude = extract_magnitude(rpm_value)
+    rpm = int(rpm_magnitude) if rpm_magnitude is not None else None
+
+    speed_kmh = extract_magnitude(speed_value, "km/h")
+    speed_mph = round(speed_kmh * 0.621371, 1) if speed_kmh is not None else None
+
+    coolant_c = extract_magnitude(coolant_value, "degC")
+    coolant_temp_f = (
+        round((coolant_c * 9 / 5) + 32, 1) if coolant_c is not None else None
+    )
+
+    throttle_raw = extract_magnitude(throttle_value, "percent")
+    throttle_pct = round(throttle_raw, 1) if throttle_raw is not None else None
+
+    reading: Dict[str, float | int | str] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "rpm": rpm,
+        "coolant_temp_f": coolant_temp_f,
+        "vehicle_speed_mph": speed_mph,
+        "throttle_position_pct": throttle_pct,
+    }
+    return reading
 
 
 def run_real_mode(args: argparse.Namespace) -> None:
-    """Placeholder real hardware flow that will be completed tomorrow."""
+    """Poll real hardware until shutdown is requested."""
 
-    # All real hardware runs will come through this function. By separating it
-    # out, we can grow reconnect logic and error handling without cluttering the
-    # fake path that beginners use for quick experiments.
-    log(LOG_PREFIX_REAL, "Attempting hardware mode setup (design scaffold only).")
+    log(LOG_PREFIX_REAL, "Starting real OBD-II capture loop.")
+
+    connection = connect_to_obd()
+    if connection is None:
+        log(LOG_PREFIX_ERROR, "No OBD connection available; aborting real mode.")
+        return
 
     try:
-        connection = connect_to_obd()
-        # TODO: Add reconnect loop here once bluetooth/python-OBD is wired up.
-        reading = read_obd_pids(connection)
-        log(LOG_PREFIX_REAL, format_reading(reading))
-    except NotImplementedError:
-        log(
-            LOG_PREFIX_REAL,
-            "Real OBD-II support lands tomorrow. Tonight only scaffolding runs.",
-        )
-    except Exception as exc:  # pragma: no cover - defensive logging for tomorrow
-        # When the full implementation lands we will reconnect instead of
-        # exiting. Keeping the placeholder log ensures the control flow is
-        # visible today without touching serial ports.
-        log(LOG_PREFIX_ERROR, f"Unexpected error in real mode scaffold: {exc}")
+        with CsvLogger() as csv_logger:
+            while not shutdown_requested():
+                start = time.time()
+                try:
+                    reading = read_obd_pids(connection)
+                except Exception as exc:
+                    log(LOG_PREFIX_WARN, f"Read failed: {exc}; attempting reconnect.")
+                    connection = reconnect_obd(connection)
+                    if connection is None:
+                        log(
+                            LOG_PREFIX_ERROR,
+                            "Reconnect failed; waiting before next attempt.",
+                        )
+                        time.sleep(2)
+                    continue
+
+                csv_logger.write(reading)
+                log(LOG_PREFIX_REAL, format_reading(reading))
+
+                elapsed = time.time() - start
+                if elapsed < 1:
+                    time.sleep(1 - elapsed)
+    finally:
+        try:
+            connection.close()
+        except Exception:  # pragma: no cover - defensive cleanup
+            pass
 
 
 def main() -> None:
