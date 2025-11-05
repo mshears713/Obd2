@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import obd
 import csv
 import math
 import signal
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
+
+
+if TYPE_CHECKING:  # pragma: no cover - used only for type hints
+    import obd
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +181,7 @@ def handle_sigint(signum, frame) -> None:
     raise KeyboardInterrupt
 
 
-def reconnect_obd(connection: Optional[obd.OBD]) -> Optional[obd.OBD]:
+def reconnect_obd(connection: "obd.OBD | None") -> "obd.OBD | None":
     """Close the old handle, wait briefly, and return a fresh connection."""
 
     try:
@@ -245,10 +248,16 @@ def run_fake_mode(args: argparse.Namespace) -> None:
         )
 
 
-def connect_to_obd() -> Optional[obd.OBD]:
+def connect_to_obd() -> "obd.OBD | None":
     """Connect to the bluetooth adapter and return the python-OBD handle."""
 
     try:
+        try:
+            import obd
+        except ImportError:
+            print("[REAL] python-OBD not available. Skipping real mode.")
+            return None
+
         log(LOG_PREFIX_REAL, "Connecting to OBD-II adapter on /dev/rfcomm0…")
         connection = obd.OBD("/dev/rfcomm0", fast=False)
         status = connection.status()
@@ -299,11 +308,16 @@ def connect_to_obd() -> Optional[obd.OBD]:
     return None
 
 
-def read_obd_pids(connection: Optional[obd.OBD]) -> Dict[str, float | int | str]:
+def read_obd_pids(connection: "obd.OBD | None") -> Dict[str, float | int | str]:
     """Query a handful of PIDs and return them in CSV-friendly form."""
 
     if connection is None:
         raise ValueError("No OBD connection available.")
+
+    try:
+        import obd
+    except ImportError as exc:  # pragma: no cover - defensive guard
+        raise RuntimeError("python-OBD module missing during real mode.") from exc
 
     def safe_query(command):
         try:
