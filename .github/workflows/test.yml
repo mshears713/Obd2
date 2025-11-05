@@ -104,6 +104,60 @@ jobs:
               raise SystemExit(1)
           PY
 
+      - name: Text dashboard checks
+        run: |
+          python - <<'PY'
+          import contextlib
+          import io
+          from unittest import mock
+
+          import text_dashboard
+
+          checks: list[tuple[bool, str]] = []
+
+          def record(ok: bool, message: str) -> None:
+              icon = "✅" if ok else "❌"
+              status = "PASS" if ok else "FAIL"
+              print(f"[CI] {status}: {message} {icon}")
+              checks.append((ok, message))
+
+          record(True, "text_dashboard imported")
+
+          fake_reading = {
+              "timestamp": "2024-01-01T00:00:00Z",
+              "rpm": 2200,
+              "vehicle_speed_mph": 42,
+              "coolant_temp_f": 185,
+              "throttle_position_pct": 37,
+          }
+
+          loop_buffer = io.StringIO()
+          with mock.patch("text_dashboard.get_latest_reading", return_value=fake_reading), mock.patch(
+              "text_dashboard.time.sleep", return_value=None
+          ), contextlib.redirect_stdout(loop_buffer):
+              text_dashboard.run_dashboard(iterations=1)
+
+          loop_output = loop_buffer.getvalue()
+          for snippet in ["RPM", "Speed mph", "Coolant F", "Throttle", "Source: CSV"]:
+              record(snippet in loop_output, f"output contains '{snippet}'")
+
+          fallback_buffer = io.StringIO()
+          with mock.patch("text_dashboard.get_latest_reading", side_effect=RuntimeError("no data")), mock.patch(
+              "text_dashboard.generate_fake_reading", return_value=fake_reading
+          ), mock.patch("text_dashboard.time.sleep", side_effect=KeyboardInterrupt), contextlib.redirect_stdout(
+              fallback_buffer
+          ):
+              text_dashboard.run_dashboard(iterations=2)
+
+          fallback_output = fallback_buffer.getvalue()
+          record("Source: Simulated" in fallback_output, "fallback mode reported")
+          record("Stopping dashboard" in fallback_output, "KeyboardInterrupt handled")
+
+          failures = [message for ok, message in checks if not ok]
+          if failures:
+              raise SystemExit("; ".join(failures))
+          PY
+
       - name: Final CI summary
         if: success()
         run: |
