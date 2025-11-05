@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import math
+import signal
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -12,6 +15,11 @@ from typing import Dict, Optional
 # - Import python-OBD and open a Bluetooth serial connection automatically.
 # - Add a reconnect loop that keeps trying when the adapter momentarily drops.
 # - Replace NotImplementedError with real PID queries feeding read_obd_pids().
+
+
+CSV_FILENAME = "obd_readings.csv"
+FAKE_RECONNECT_EVERY = 3
+_shutdown_requested = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,6 +48,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         metavar="COUNT",
         help="Run COUNT fake readings (about one per second) then exit.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable extra debug hooks (placeholder for tomorrow's features).",
     )
     return parser.parse_args()
 
@@ -101,7 +114,70 @@ def run_fake_smoke_test() -> None:
     log("fake", "Smoke test finished cleanly.")
 
 
-def run_fake_cycles(count: int) -> None:
+@dataclass
+class CsvLogger:
+    """Simple CSV writer that auto-writes headers and flushes each row."""
+
+    filename: str = CSV_FILENAME
+    _file: Optional[object] = None
+    _writer: Optional[csv.DictWriter] = None
+
+    def __enter__(self) -> "CsvLogger":
+        self._file = open(self.filename, "w", newline="", encoding="utf-8")
+        self._writer = None
+        return self
+
+    def __exit__(self, exc_type, exc, exc_tb) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+            self._writer = None
+
+    def write(self, reading: Dict[str, float | int | str]) -> None:
+        if self._file is None:
+            return
+
+        if self._writer is None:
+            headers = list(reading.keys())
+            self._writer = csv.DictWriter(self._file, fieldnames=headers)
+            self._writer.writeheader()
+
+        assert self._writer is not None
+        self._writer.writerow(reading)
+        self._file.flush()
+
+
+def shutdown_requested() -> bool:
+    """Return True if the signal handler asked for a graceful shutdown."""
+
+    return _shutdown_requested
+
+
+def handle_sigint(signum, frame) -> None:
+    """Log the intent to shut down and raise KeyboardInterrupt for cleanup."""
+
+    global _shutdown_requested
+    if not _shutdown_requested:
+        _shutdown_requested = True
+        log("INFO", "Ctrl-C received; requesting graceful shutdown.")
+    else:  # pragma: no cover - defensive in case of repeated Ctrl-C
+        log("WARN", "Second Ctrl-C received; forcing immediate shutdown.")
+    raise KeyboardInterrupt
+
+
+def reconnect_obd(connection: Optional[object]) -> Optional[object]:
+    """Return a fresh OBD-II connection.
+
+    TODO: Tomorrow we will close the stale handle, wait briefly, and call
+    python-OBD to reconnect automatically. The fake mode already exercises this
+    hook so the control flow is ready when real hardware arrives.
+    """
+
+    log("reconnect", "reconnect_obd() placeholder invoked; no hardware actions.")
+    return connection
+
+
+def run_fake_cycles(count: int, csv_logger: CsvLogger | None = None) -> None:
     """Run COUNT fake readings spaced roughly one second apart."""
 
     if count <= 0:
@@ -109,13 +185,33 @@ def run_fake_cycles(count: int) -> None:
         return
 
     log("fake", f"Running {count} fake cycle(s) with no hardware attached.")
-    for index in range(1, count + 1):
-        start = time.time()
-        reading = generate_fake_reading(start)
-        log("fake", f"Cycle {index}/{count}: {format_reading(reading)}")
-        time.sleep(max(0, 1 - (time.time() - start)))
+    completed = False
+    try:
+        for index in range(1, count + 1):
+            if shutdown_requested():
+                log("fake", "Shutdown requested; ending fake cycles early.")
+                break
 
-    log("fake", "Completed requested fake cycles.")
+            start = time.time()
+            reading = generate_fake_reading(start)
+            if csv_logger is not None:
+                csv_logger.write(reading)
+            log("fake", f"Cycle {index}/{count}: {format_reading(reading)}")
+
+            if index % FAKE_RECONNECT_EVERY == 0:
+                log("reconnect", "Lost connection, will retry…")
+                reconnect_obd(None)
+
+            elapsed = time.time() - start
+            if elapsed < 1:
+                time.sleep(1 - elapsed)
+        else:
+            completed = True
+    finally:
+        if completed:
+            log("fake", "Completed requested fake cycles.")
+        elif shutdown_requested():
+            log("fake", "Fake cycles stopped due to shutdown request.")
 
 
 def run_fake_mode(args: argparse.Namespace) -> None:
@@ -181,31 +277,47 @@ def run_real_mode(args: argparse.Namespace) -> None:
 def main() -> None:
     """Script entry point used by both manual runs and CI."""
 
+    global _shutdown_requested
+    _shutdown_requested = False
+
     args = parse_args()
-    log("INFO", "Starting OBD-II data logger skeleton.")
+    signal.signal(signal.SIGINT, handle_sigint)
 
-    if args.fake_run is not None:
-        run_fake_cycles(args.fake_run)
-        return
+    log("INFO", "===== Starting OBD-II data logger skeleton =====")
+    if args.debug:
+        log("INFO", "Debug hooks enabled (no additional behaviour yet).")
 
-    if args.smoke_test:
-        if not args.fake:
-            log("INFO", "--smoke-test defaults to fake data until hardware arrives.")
-        run_fake_smoke_test()
-        return
+    try:
+        if args.fake_run is not None:
+            with CsvLogger() as csv_logger:
+                run_fake_cycles(args.fake_run, csv_logger=csv_logger)
+            return
 
-    if args.fake:
-        run_fake_mode(args)
-        return
+        if args.smoke_test:
+            if not args.fake:
+                log("INFO", "--smoke-test defaults to fake data until hardware arrives.")
+            run_fake_smoke_test()
+            return
 
-    if args.print_sample:
-        log("WARN", "--print-sample requires fake data until hardware support is added.")
+        if args.fake:
+            run_fake_mode(args)
+            return
 
-    log(
-        "real",
-        "Switching to hardware scaffolding. No bluetooth/python-OBD actions tonight.",
-    )
-    run_real_mode(args)
+        if args.print_sample:
+            log(
+                "WARN",
+                "--print-sample requires fake data until hardware support is added.",
+            )
+
+        log(
+            "real",
+            "Switching to hardware scaffolding. No bluetooth/python-OBD actions tonight.",
+        )
+        run_real_mode(args)
+    except KeyboardInterrupt:
+        log("INFO", "KeyboardInterrupt caught; finishing cleanup.")
+    finally:
+        log("INFO", "===== Shutdown complete =====")
 
 
 if __name__ == "__main__":
