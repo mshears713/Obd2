@@ -11,48 +11,60 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+
+# ---------------------------------------------------------------------------
+# Configuration constants (tomorrow's real OBD hooks will reuse these values).
+# ---------------------------------------------------------------------------
+CSV_FILENAME = "obd_readings.csv"
+FAKE_RECONNECT_EVERY = 3
+LOG_PREFIX_SYSTEM = "SYSTEM"
+LOG_PREFIX_FAKE = "FAKE"
+LOG_PREFIX_REAL = "REAL"
+LOG_PREFIX_CSV = "CSV"
+LOG_PREFIX_WARN = "WARN"
+LOG_PREFIX_ERROR = "ERROR"
+
 # TODO (tomorrow):
 # - Import python-OBD and open a Bluetooth serial connection automatically.
 # - Add a reconnect loop that keeps trying when the adapter momentarily drops.
 # - Replace NotImplementedError with real PID queries feeding read_obd_pids().
 
 
-CSV_FILENAME = "obd_readings.csv"
-FAKE_RECONNECT_EVERY = 3
 _shutdown_requested = False
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments used to control how the script runs."""
+    """Parse user-friendly command-line arguments for the prototype."""
 
     parser = argparse.ArgumentParser(
-        description="Prototype CLI for the Raspberry Pi OBD-II logger"
+        description="Simple CLI shell for the Raspberry Pi OBD-II logger prototype",
     )
+    # Tomorrow we will add real OBD connection options (Bluetooth port, baud, etc.).
     parser.add_argument(
         "--fake",
         action="store_true",
-        help="Use simulated sensor values instead of connecting to hardware.",
+        help="Use gentle sine-wave readings instead of real hardware.",
     )
     parser.add_argument(
         "--print-sample",
         action="store_true",
-        help="Print a sample CSV header and a single reading.",
+        help="Show the CSV header plus one fake reading.",
     )
     parser.add_argument(
         "--smoke-test",
         action="store_true",
-        help="Generate one fake reading, log it, and exit immediately.",
+        help="Log one fake reading then exit (great for CI).",
     )
     parser.add_argument(
         "--fake-run",
         type=int,
         metavar="COUNT",
-        help="Run COUNT fake readings (about one per second) then exit.",
+        help="Write COUNT fake readings (about one per second) then exit.",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Enable extra debug hooks (placeholder for tomorrow's features).",
+        help="Print extra scaffolding logs while experimenting.",
     )
     return parser.parse_args()
 
@@ -99,19 +111,19 @@ def print_sample_output(reading: Dict[str, float | int | str]) -> None:
     """Keep the earlier CSV demo so beginners can see the structure."""
 
     headers = list(reading.keys())
-    log("INFO", "Sample CSV header")
+    log(LOG_PREFIX_CSV, "Sample CSV header")
     print(",".join(headers))
-    log("INFO", "Sample fake reading")
+    log(LOG_PREFIX_CSV, "Sample fake reading")
     print(",".join(str(reading[field]) for field in headers))
 
 
 def run_fake_smoke_test() -> None:
     """Run a single fake reading then stop. Perfect for CI smoke tests."""
 
-    log("fake", "Starting fake smoke test.")
+    log(LOG_PREFIX_FAKE, "Starting fake smoke test.")
     reading = generate_fake_reading()
-    log("fake", format_reading(reading))
-    log("fake", "Smoke test finished cleanly.")
+    log(LOG_PREFIX_FAKE, format_reading(reading))
+    log(LOG_PREFIX_FAKE, "Smoke test finished cleanly.")
 
 
 @dataclass
@@ -159,9 +171,9 @@ def handle_sigint(signum, frame) -> None:
     global _shutdown_requested
     if not _shutdown_requested:
         _shutdown_requested = True
-        log("INFO", "Ctrl-C received; requesting graceful shutdown.")
+        log(LOG_PREFIX_SYSTEM, "Ctrl-C received; requesting graceful shutdown.")
     else:  # pragma: no cover - defensive in case of repeated Ctrl-C
-        log("WARN", "Second Ctrl-C received; forcing immediate shutdown.")
+        log(LOG_PREFIX_WARN, "Second Ctrl-C received; forcing immediate shutdown.")
     raise KeyboardInterrupt
 
 
@@ -173,7 +185,10 @@ def reconnect_obd(connection: Optional[object]) -> Optional[object]:
     hook so the control flow is ready when real hardware arrives.
     """
 
-    log("reconnect", "reconnect_obd() placeholder invoked; no hardware actions.")
+    log(
+        LOG_PREFIX_REAL,
+        "reconnect_obd() placeholder invoked; waiting for tomorrow's hardware hooks.",
+    )
     return connection
 
 
@@ -181,25 +196,25 @@ def run_fake_cycles(count: int, csv_logger: CsvLogger | None = None) -> None:
     """Run COUNT fake readings spaced roughly one second apart."""
 
     if count <= 0:
-        log("WARN", "--fake-run COUNT must be greater than zero.")
+        log(LOG_PREFIX_WARN, "--fake-run COUNT must be greater than zero.")
         return
 
-    log("fake", f"Running {count} fake cycle(s) with no hardware attached.")
+    log(LOG_PREFIX_FAKE, f"Running {count} fake cycle(s) with no hardware attached.")
     completed = False
     try:
         for index in range(1, count + 1):
             if shutdown_requested():
-                log("fake", "Shutdown requested; ending fake cycles early.")
+                log(LOG_PREFIX_FAKE, "Shutdown requested; ending fake cycles early.")
                 break
 
             start = time.time()
             reading = generate_fake_reading(start)
             if csv_logger is not None:
                 csv_logger.write(reading)
-            log("fake", f"Cycle {index}/{count}: {format_reading(reading)}")
+            log(LOG_PREFIX_FAKE, f"Cycle {index}/{count}: {format_reading(reading)}")
 
             if index % FAKE_RECONNECT_EVERY == 0:
-                log("reconnect", "Lost connection, will retry…")
+                log(LOG_PREFIX_REAL, "Lost connection, will retry…")
                 reconnect_obd(None)
 
             elapsed = time.time() - start
@@ -209,22 +224,25 @@ def run_fake_cycles(count: int, csv_logger: CsvLogger | None = None) -> None:
             completed = True
     finally:
         if completed:
-            log("fake", "Completed requested fake cycles.")
+            log(LOG_PREFIX_FAKE, "Completed requested fake cycles.")
         elif shutdown_requested():
-            log("fake", "Fake cycles stopped due to shutdown request.")
+            log(LOG_PREFIX_FAKE, "Fake cycles stopped due to shutdown request.")
 
 
 def run_fake_mode(args: argparse.Namespace) -> None:
     """Handle legacy fake options that pre-date the new modes."""
 
-    log("fake", "Running in fake mode (no hardware required).")
+    log(LOG_PREFIX_FAKE, "Running in fake mode (no hardware required).")
     reading = generate_fake_reading()
 
     if args.print_sample:
         print_sample_output(reading)
-        log("fake", "Self-test complete.")
+        log(LOG_PREFIX_FAKE, "Self-test complete.")
     else:
-        log("fake", "Fake mode ready. Use --print-sample to view a reading.")
+        log(
+            LOG_PREFIX_FAKE,
+            "Fake mode ready. Use --print-sample to view a reading.",
+        )
 
 
 def connect_to_obd() -> Optional[object]:
@@ -233,7 +251,10 @@ def connect_to_obd() -> Optional[object]:
     # Tomorrow we will import python-OBD here, detect available Bluetooth serial
     # ports, and call obd.OBD() to open the best match. Until then we simply
     # return None so the rest of the flow can be written and logged.
-    log("real", "connect_to_obd() placeholder called; no hardware actions taken.")
+    log(
+        LOG_PREFIX_REAL,
+        "connect_to_obd() placeholder called; no hardware actions taken.",
+    )
     return None
 
 
@@ -255,23 +276,23 @@ def run_real_mode(args: argparse.Namespace) -> None:
     # All real hardware runs will come through this function. By separating it
     # out, we can grow reconnect logic and error handling without cluttering the
     # fake path that beginners use for quick experiments.
-    log("real", "Attempting hardware mode setup (design scaffold only).")
+    log(LOG_PREFIX_REAL, "Attempting hardware mode setup (design scaffold only).")
 
     try:
         connection = connect_to_obd()
         # TODO: Add reconnect loop here once bluetooth/python-OBD is wired up.
         reading = read_obd_pids(connection)
-        log("real", format_reading(reading))
+        log(LOG_PREFIX_REAL, format_reading(reading))
     except NotImplementedError:
         log(
-            "real",
+            LOG_PREFIX_REAL,
             "Real OBD-II support lands tomorrow. Tonight only scaffolding runs.",
         )
     except Exception as exc:  # pragma: no cover - defensive logging for tomorrow
         # When the full implementation lands we will reconnect instead of
         # exiting. Keeping the placeholder log ensures the control flow is
         # visible today without touching serial ports.
-        log("ERROR", f"Unexpected error in real mode scaffold: {exc}")
+        log(LOG_PREFIX_ERROR, f"Unexpected error in real mode scaffold: {exc}")
 
 
 def main() -> None:
@@ -283,9 +304,9 @@ def main() -> None:
     args = parse_args()
     signal.signal(signal.SIGINT, handle_sigint)
 
-    log("INFO", "===== Starting OBD-II data logger skeleton =====")
+    log(LOG_PREFIX_SYSTEM, "===== Starting OBD-II data logger skeleton =====")
     if args.debug:
-        log("INFO", "Debug hooks enabled (no additional behaviour yet).")
+        log(LOG_PREFIX_SYSTEM, "Debug hooks enabled (no additional behaviour yet).")
 
     try:
         if args.fake_run is not None:
@@ -295,7 +316,10 @@ def main() -> None:
 
         if args.smoke_test:
             if not args.fake:
-                log("INFO", "--smoke-test defaults to fake data until hardware arrives.")
+                log(
+                    LOG_PREFIX_SYSTEM,
+                    "--smoke-test defaults to fake data until hardware arrives.",
+                )
             run_fake_smoke_test()
             return
 
@@ -305,19 +329,19 @@ def main() -> None:
 
         if args.print_sample:
             log(
-                "WARN",
+                LOG_PREFIX_WARN,
                 "--print-sample requires fake data until hardware support is added.",
             )
 
         log(
-            "real",
+            LOG_PREFIX_REAL,
             "Switching to hardware scaffolding. No bluetooth/python-OBD actions tonight.",
         )
         run_real_mode(args)
     except KeyboardInterrupt:
-        log("INFO", "KeyboardInterrupt caught; finishing cleanup.")
+        log(LOG_PREFIX_SYSTEM, "KeyboardInterrupt caught; finishing cleanup.")
     finally:
-        log("INFO", "===== Shutdown complete =====")
+        log(LOG_PREFIX_SYSTEM, "===== Shutdown complete =====")
 
 
 if __name__ == "__main__":

@@ -38,23 +38,76 @@ jobs:
           from pathlib import Path
 
           path = Path("obd_readings.csv")
-          if not path.exists():
-              raise SystemExit("CSV file missing: obd_readings.csv")
+          checks = []
 
-          with path.open(newline="", encoding="utf-8") as handle:
-              rows = list(csv.reader(handle))
+          def record(ok: bool, message: str) -> bool:
+              icon = "✅" if ok else "❌"
+              print(f"[CI] {message} {icon}")
+              checks.append((ok, message))
+              return ok
 
-          if not rows:
-              raise SystemExit("CSV file is empty")
+          exists = record(path.exists(), "CSV file exists")
+          if exists:
+              with path.open(newline="", encoding="utf-8") as handle:
+                  rows = list(csv.reader(handle))
 
-          header = rows[0]
-          if not header:
-              raise SystemExit("CSV header row missing")
+              record(bool(rows), "CSV contains rows")
+              header_present = bool(rows[0]) if rows else False
+              record(header_present, "CSV header present")
 
-          if len(rows) - 1 < 3:
-              raise SystemExit("CSV does not contain at least 3 readings")
+              row_count = len(rows) - 1 if rows else 0
+              meets_threshold = row_count >= 3
+              record(meets_threshold, "Row count >= 3")
+          else:
+              record(False, "CSV header present")
+              record(False, "Row count >= 3")
+
+          print("\n[CI] CSV summary:")
+          for ok, message in checks:
+              status = "PASS" if ok else "FAIL"
+              icon = "✅" if ok else "❌"
+              print(f"[CI] {status}: {message} {icon}")
+
+          if not all(ok for ok, _ in checks):
+              raise SystemExit(1)
           PY
 
       - name: Graceful shutdown simulation
         run: |
-          python main.py --fake-run 5 --debug
+          python - <<'PY'
+          import subprocess
+          import sys
+
+          checks = []
+
+          def record(ok: bool, message: str) -> None:
+              icon = "✅" if ok else "❌"
+              status = "PASS" if ok else "FAIL"
+              print(f"[CI] {message} {icon}")
+              checks.append((status, message, icon))
+
+          cmd = [sys.executable, "main.py", "--fake-run", "5", "--debug"]
+          proc = subprocess.run(cmd, capture_output=True, text=True)
+          print(proc.stdout, end="")
+          if proc.stderr:
+              print(proc.stderr, file=sys.stderr, end="")
+
+          record(proc.returncode == 0, "Graceful exit")
+          shutdown_logged = "===== Shutdown complete =====" in proc.stdout
+          record(shutdown_logged, "Shutdown banner printed")
+
+          print("\n[CI] Run summary:")
+          for status, message, icon in checks:
+              print(f"[CI] {status}: {message} {icon}")
+
+          if proc.returncode != 0 or not shutdown_logged:
+              raise SystemExit(1)
+          PY
+
+      - name: Final CI summary
+        if: success()
+        run: |
+          echo ""
+          echo "[CI] Overall summary:"
+          echo "[CI] CSV validation ✅"
+          echo "[CI] Graceful shutdown ✅"
