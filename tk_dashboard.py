@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import TclError
 from typing import Dict, Tuple
 
-from data_manager import get_latest_reading
+from data_manager import get_latest_reading, _read_obd_live
 from main import generate_fake_reading
 
 COLORS = {
@@ -16,18 +16,22 @@ COLORS = {
     "sim": "#ffcc66",
     "rpm": "#ff5555",
     "bar_bg": "#2a2a2a",
+    "timing": "#ffb347",
 }
 FONT = "Consolas"
 REFRESH_MS = 1000
 FIELDS = [
-    ("RPM", "rpm", "{:.0f}"),
-    ("Speed (mph)", "vehicle_speed_mph", "{:.1f}"),
-    ("Coolant Temp (°F)", "coolant_temp_f", "{:.1f}"),
-    ("Throttle (%)", "throttle_position_pct", "{:.1f}"),
+    ("RPM", "rpm", "{:.0f}", 0),
+    ("Speed (mph)", "vehicle_speed_mph", "{:.1f}", 0),
+    ("Coolant Temp (°F)", "coolant_temp_f", "{:.1f}", 0),
+    ("Throttle (%)", "throttle_position_pct", "{:.1f}", 1),
+    ("Load (%)", "engine_load_pct", "{:.1f}", 1),
+    ("Timing (°)", "timing_advance_deg", "{:.1f}", 1),
 ]
 BAR_CONFIG: Dict[str, Tuple[float, str]] = {
     "Speed (mph)": (120.0, "#8be9fd"),
     "Throttle (%)": (100.0, "#50fa7b"),
+    "Load (%)": (100.0, "#4caf50"),
 }
 
 
@@ -73,6 +77,7 @@ class DashboardApp:
         self.frame_count = 0
         self.simulated_mode = False
         self.data_source = data_source
+        self.obd_connection: object | None = None
 
         header = tk.Frame(root, bg=COLORS["bg"])
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
@@ -97,18 +102,22 @@ class DashboardApp:
         body = tk.Frame(root, bg=COLORS["bg"])
         body.grid(row=1, column=0, sticky="nsew", padx=20)
         if hasattr(body, "grid_columnconfigure"):
-            body.grid_columnconfigure(0, weight=1)
-            body.grid_columnconfigure(1, weight=1)
+            for column in range(4):
+                body.grid_columnconfigure(column, weight=1)
 
-        row_index = 0
-        for title, _, _ in FIELDS:
+        column_offsets = {0: (0, 1), 1: (2, 3)}
+        column_rows = {0: 0, 1: 0}
+
+        for title, _, _, column in FIELDS:
+            label_column, value_column = column_offsets[column]
+            row_index = column_rows[column]
             tk.Label(
                 body,
                 text=title,
                 font=(FONT, 16),
                 bg=COLORS["bg"],
                 fg=COLORS["fg"],
-            ).grid(row=row_index, column=0, sticky="w", pady=(0, 4))
+            ).grid(row=row_index, column=label_column, sticky="w", pady=(0, 4))
             value = tk.Label(
                 body,
                 text="--",
@@ -116,7 +125,7 @@ class DashboardApp:
                 bg=COLORS["bg"],
                 fg=COLORS["fg"],
             )
-            value.grid(row=row_index, column=1, sticky="e", pady=(0, 4))
+            value.grid(row=row_index, column=value_column, sticky="e", pady=(0, 4))
             self.value_labels[title] = value
 
             if title in BAR_CONFIG:
@@ -140,15 +149,15 @@ class DashboardApp:
                     )
                 canvas.grid(
                     row=row_index + 1,
-                    column=0,
+                    column=label_column,
                     columnspan=2,
                     sticky="ew",
                     pady=(0, 12),
                 )
                 self.bars[title] = (canvas, bar_id, BAR_CONFIG[title][0])
-                row_index += 2
+                column_rows[column] += 2
             else:
-                row_index += 1
+                column_rows[column] += 1
 
         footer = tk.Frame(root, bg=COLORS["bg"])
         footer.grid(row=2, column=0, sticky="ew", padx=20, pady=(10, 20))
@@ -182,7 +191,11 @@ class DashboardApp:
         source_hint = "Live OBD" if self.data_source == "obd" else "CSV Replay"
 
         try:
-            latest = get_latest_reading(source=self.data_source)
+            if self.data_source == "obd":
+                connection = self._ensure_obd_connection()
+                latest = _read_obd_live(connection)
+            else:
+                latest = get_latest_reading(source=self.data_source)
             if not latest:
                 raise ValueError("No reading available from data manager.")
             reading = latest
@@ -200,6 +213,8 @@ class DashboardApp:
                     "vehicle_speed_mph": 0.0,
                     "coolant_temp_f": 0.0,
                     "throttle_position_pct": 0.0,
+                    "engine_load_pct": 0.0,
+                    "timing_advance_deg": 0.0,
                 }
         else:
             reading = dict(reading)
@@ -211,7 +226,7 @@ class DashboardApp:
 
         self.simulated_mode = simulated
 
-        for title, key, fmt in FIELDS:
+        for title, key, fmt, _column in FIELDS:
             raw = reading.get(key, 0) or 0
             try:
                 value = float(raw)
@@ -229,6 +244,8 @@ class DashboardApp:
                     label.configure(fg=_coolant_to_color(value))
                 except (TypeError, ValueError):
                     label.configure(fg=COLORS["fg"])
+            elif title == "Timing (°)":
+                label.configure(fg=COLORS["timing"])
             else:
                 label.configure(fg=COLORS["fg"])
 
@@ -262,8 +279,43 @@ class DashboardApp:
         """Handle the window close event cleanly."""
 
         self.stop()
+        if self.obd_connection is not None:
+            try:
+                close = getattr(self.obd_connection, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
+            self.obd_connection = None
         print("Dashboard closed cleanly.")
         self.root.destroy()
+
+    def _ensure_obd_connection(self):
+        """Return a connected OBD handle, reopening the port if needed."""
+
+        try:
+            import obd
+        except ImportError as exc:  # pragma: no cover - hardware dependency
+            raise RuntimeError("python-OBD library not installed") from exc
+
+        still_connected = False
+        if self.obd_connection is not None:
+            still_connected = bool(
+                getattr(self.obd_connection, "is_connected", lambda: False)()
+            )
+            if not still_connected:
+                try:
+                    close = getattr(self.obd_connection, "close", None)
+                    if callable(close):
+                        close()
+                except Exception:
+                    pass
+                self.obd_connection = None
+
+        if self.obd_connection is None:
+            self.obd_connection = obd.OBD("/dev/rfcomm0")
+
+        return self.obd_connection
 
     def _update_bar(self, title: str, value: float) -> None:
         """Resize the simple bar to match the new sensor value."""

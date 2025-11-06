@@ -101,6 +101,8 @@ def generate_fake_reading(tick: float | None = None) -> Dict[str, float | int | 
     rpm_cycle = 750 + 350 * (1 + math.sin(tick / 2))
     throttle_cycle = 12 + 8 * (1 + math.sin(tick / 3))
     speed_cycle = 5 + 20 * (1 + math.sin(tick / 4))
+    load_cycle = 35 + 25 * (1 + math.sin(tick / 3.5))
+    timing_cycle = -5 + 12 * math.sin(tick / 6)
 
     reading = {
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -108,6 +110,8 @@ def generate_fake_reading(tick: float | None = None) -> Dict[str, float | int | 
         "coolant_temp_f": round(183 + 4 * math.sin(tick / 5), 1),
         "vehicle_speed_mph": round(speed_cycle, 1),
         "throttle_position_pct": round(throttle_cycle, 1),
+        "engine_load_pct": round(load_cycle, 1),
+        "timing_advance_deg": round(timing_cycle, 1),
     }
     return reading
 
@@ -119,7 +123,9 @@ def format_reading(reading: Dict[str, float | int | str]) -> str:
         f"RPM={reading['rpm']} | "
         f"Speed={reading['vehicle_speed_mph']} mph | "
         f"Coolant={reading['coolant_temp_f']}F | "
-        f"Throttle={reading['throttle_position_pct']}%"
+        f"Throttle={reading['throttle_position_pct']}% | "
+        f"Load={reading.get('engine_load_pct', 'n/a')}% | "
+        f"Timing={reading.get('timing_advance_deg', 'n/a')}°"
     )
 
 
