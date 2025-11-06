@@ -117,6 +117,8 @@ def test_refresh_updates_labels(monkeypatch: pytest.MonkeyPatch) -> None:
         "vehicle_speed_mph": 55.5,
         "coolant_temp_f": 188.2,
         "throttle_position_pct": 22.5,
+        "engine_load_pct": 46.0,
+        "timing_advance_deg": 4.5,
     }
     monkeypatch.setattr(
         tk_dashboard, "get_latest_reading", lambda source="csv": fake_reading
@@ -146,6 +148,8 @@ def test_on_close_cancels_after(monkeypatch: pytest.MonkeyPatch) -> None:
         "vehicle_speed_mph": 33.3,
         "coolant_temp_f": 185.0,
         "throttle_position_pct": 18.2,
+        "engine_load_pct": 42.0,
+        "timing_advance_deg": 1.5,
     }
     monkeypatch.setattr(
         tk_dashboard, "get_latest_reading", lambda source="csv": fake_reading
