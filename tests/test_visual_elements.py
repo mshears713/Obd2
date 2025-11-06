@@ -19,7 +19,7 @@ def test_dashboard_widgets_exist() -> None:
 
     app = DashboardApp(root)
 
-    for title, _, _ in FIELDS:
+    for title, _, _, _ in FIELDS:
         assert title in app.value_labels
         assert isinstance(app.value_labels[title], tk.Label)
 
