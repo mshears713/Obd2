@@ -54,7 +54,10 @@ def _make_app(
     """Create the dashboard app with patched data sources."""
 
     root = _build_root()
-    monkeypatch.setattr(tk_dashboard, "get_latest_reading", reader)
+    def patched_reader(*_args, **_kwargs):
+        return reader()
+
+    monkeypatch.setattr(tk_dashboard, "get_latest_reading", patched_reader)
     if fake_generator is not None:
         monkeypatch.setattr(tk_dashboard, "generate_fake_reading", fake_generator)
     app = tk_dashboard.DashboardApp(root)
@@ -166,7 +169,14 @@ def test_shutdown_cancels_after(monkeypatch: pytest.MonkeyPatch) -> None:
 
         app.on_close()
         assert app.after_id is None
-        assert not root.winfo_exists()
+        try:
+            exists = root.winfo_exists()
+        except Exception:
+            exists = False
+        assert not exists, "Root window should be destroyed"
     finally:
-        if root.winfo_exists():
-            root.destroy()
+        try:
+            if root.winfo_exists():
+                root.destroy()
+        except Exception:
+            pass

@@ -53,7 +53,7 @@ def _coolant_to_color(temp_f: float) -> str:
 class DashboardApp:
     """Create the window, keep the labels updated, and handle shutdown."""
 
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, data_source: str = "csv") -> None:
         self.root = root
         self.root.title("OBD-II Live Dashboard")
         self.root.geometry("540x360")
@@ -72,6 +72,7 @@ class DashboardApp:
         self.after_id: str | None = None
         self.frame_count = 0
         self.simulated_mode = False
+        self.data_source = data_source
 
         header = tk.Frame(root, bg=COLORS["bg"])
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
@@ -178,10 +179,10 @@ class DashboardApp:
         reading: Dict[str, float | int | str]
         simulated = False
         error: Exception | None = None
-        source_hint = "CSV Replay"
+        source_hint = "Live OBD" if self.data_source == "obd" else "CSV Replay"
 
         try:
-            latest = get_latest_reading()
+            latest = get_latest_reading(source=self.data_source)
             if not latest:
                 raise ValueError("No reading available from data manager.")
             reading = latest
@@ -298,8 +299,20 @@ class DashboardApp:
 def main() -> None:
     """Launch the dashboard when run as a script."""
 
+    import argparse
+
+    parser = argparse.ArgumentParser(description="OBD-II Dashboard")
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Read live data directly from the OBD adapter",
+    )
+    args = parser.parse_args()
+
+    data_source = "obd" if args.live else "csv"
+
     root = tk.Tk()
-    app = DashboardApp(root)
+    app = DashboardApp(root, data_source=data_source)
     app.start()
     root.mainloop()
 
