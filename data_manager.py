@@ -67,11 +67,59 @@ def _write_csv(readings: List[Dict[str, float | int | str]]) -> None:
             writer.writerow(row)
 
 
+def _read_obd_live() -> Dict[str, float | int | str]:
+    """Grab a fresh sample from the Bluetooth OBD-II adapter."""
+
+    try:
+        import obd
+    except ImportError as exc:  # pragma: no cover - hardware dependency
+        raise RuntimeError("python-OBD library not installed") from exc
+
+    connection = obd.OBD("/dev/rfcomm0")
+
+    if connection.status() != obd.OBDStatus.CAR_CONNECTED:
+        status = connection.status()
+        connection.close()
+        raise RuntimeError(f"OBD not connected: {status}")
+
+    reading: Dict[str, float | int | str] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "rpm": 0,
+        "coolant_temp_f": 0.0,
+        "vehicle_speed_mph": 0.0,
+        "throttle_position_pct": 0.0,
+    }
+
+    try:
+        response = connection.query(obd.commands.RPM)
+        if not response.is_null():
+            reading["rpm"] = int(response.value.magnitude)
+
+        response = connection.query(obd.commands.SPEED)
+        if not response.is_null():
+            reading["vehicle_speed_mph"] = round(response.value.magnitude * 0.621371, 1)
+
+        response = connection.query(obd.commands.COOLANT_TEMP)
+        if not response.is_null():
+            reading["coolant_temp_f"] = round(response.value.magnitude * 9 / 5 + 32, 1)
+
+        response = connection.query(obd.commands.THROTTLE_POS)
+        if not response.is_null():
+            reading["throttle_position_pct"] = round(response.value.magnitude, 1)
+    finally:
+        connection.close()
+
+    return reading
+
+
 def get_latest_reading(source: str = "csv") -> Dict[str, float | int | str]:
-    """Return the most recent reading, making sure the CSV holds 60 rows."""
+    """Return the newest reading, either from CSV or the live adapter."""
+
+    if source == "obd":
+        return _read_obd_live()
 
     if source != "csv":
-        raise ValueError("Only CSV source is supported in Stage 1")
+        raise ValueError(f"Unknown source '{source}'. Use 'csv' or 'obd'.")
 
     raw_rows = _read_csv_rows()
     readings = [

@@ -118,7 +118,9 @@ def test_refresh_updates_labels(monkeypatch: pytest.MonkeyPatch) -> None:
         "coolant_temp_f": 188.2,
         "throttle_position_pct": 22.5,
     }
-    monkeypatch.setattr(tk_dashboard, "get_latest_reading", lambda: fake_reading)
+    monkeypatch.setattr(
+        tk_dashboard, "get_latest_reading", lambda source="csv": fake_reading
+    )
     monkeypatch.setattr(tk_dashboard, "generate_fake_reading", lambda: fake_reading)
 
     try:
@@ -145,7 +147,9 @@ def test_on_close_cancels_after(monkeypatch: pytest.MonkeyPatch) -> None:
         "coolant_temp_f": 185.0,
         "throttle_position_pct": 18.2,
     }
-    monkeypatch.setattr(tk_dashboard, "get_latest_reading", lambda: fake_reading)
+    monkeypatch.setattr(
+        tk_dashboard, "get_latest_reading", lambda source="csv": fake_reading
+    )
 
     callback_state: dict[str, object] = {}
 
