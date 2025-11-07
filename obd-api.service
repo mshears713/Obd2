@@ -1,0 +1,43 @@
+# FastAPI OBD Server Systemd Service
+# ===================================
+#
+# This service runs the FastAPI server that provides the REST API
+# and web dashboard for OBD-II data.
+#
+# INSTALLATION:
+# -------------
+# 1. Copy this file to systemd directory:
+#    sudo cp obd-api.service /etc/systemd/system/
+#
+# 2. Reload systemd to recognize the new service:
+#    sudo systemctl daemon-reload
+#
+# 3. Enable the service to start on boot:
+#    sudo systemctl enable obd-api.service
+#
+# 4. Start the service now:
+#    sudo systemctl start obd-api.service
+#
+# MANAGEMENT:
+# -----------
+# Check status:  sudo systemctl status obd-api.service
+# View logs:     sudo journalctl -u obd-api.service -f
+# Stop service:  sudo systemctl stop obd-api.service
+# Restart:       sudo systemctl restart obd-api.service
+
+[Unit]
+Description=FastAPI OBD Server
+After=network.target
+
+[Service]
+Type=simple
+User=mshears
+WorkingDirectory=/home/mshears/Desktop/Obd2API
+ExecStart=/usr/bin/python3 /home/mshears/Desktop/Obd2API/api_server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

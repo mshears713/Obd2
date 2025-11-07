@@ -1,0 +1,44 @@
+# OBD Live Reader Systemd Service
+# ================================
+#
+# This service runs the OBD-II CLI loop that reads sensor data from your car
+# and posts it to the FastAPI server every second.
+#
+# INSTALLATION:
+# -------------
+# 1. Copy this file to systemd directory:
+#    sudo cp obd-reader.service /etc/systemd/system/
+#
+# 2. Reload systemd to recognize the new service:
+#    sudo systemctl daemon-reload
+#
+# 3. Enable the service to start on boot:
+#    sudo systemctl enable obd-reader.service
+#
+# 4. Start the service now:
+#    sudo systemctl start obd-reader.service
+#
+# MANAGEMENT:
+# -----------
+# Check status:  sudo systemctl status obd-reader.service
+# View logs:     sudo journalctl -u obd-reader.service -f
+# Stop service:  sudo systemctl stop obd-reader.service
+# Restart:       sudo systemctl restart obd-reader.service
+
+[Unit]
+Description=OBD Live Reader
+After=network.target
+
+[Service]
+Type=simple
+User=mshears
+WorkingDirectory=/home/mshears/Desktop/Obd2API
+ExecStartPre=/bin/bash -c 'if [ ! -e /dev/rfcomm0 ]; then rfcomm bind 0 00:1D:A5:09:2E:B3 1 || true; fi'
+ExecStart=/usr/bin/python3 /home/mshears/Desktop/Obd2API/cli_obd_loop.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

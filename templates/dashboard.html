@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBD Live Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px 2px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .button:hover {
+            background-color: #45a049;
+        }
+        .data-container {
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        pre {
+            background-color: #f4f4f4;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            overflow-x: auto;
+            font-size: 14px;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 3px;
+            margin-left: 10px;
+            font-size: 14px;
+        }
+        .status.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .status.inactive {
+            background-color: #f44336;
+            color: white;
+        }
+        .links {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e8f4f8;
+            border-radius: 4px;
+        }
+        .links a {
+            color: #0066cc;
+            text-decoration: none;
+            margin-right: 15px;
+        }
+        .links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <h1>OBD Live Dashboard</h1>
+
+    <div>
+        <button class="button" onclick="fetchLatest()">Fetch Latest Reading</button>
+        <span id="status" class="status inactive">Not updating</span>
+    </div>
+
+    <div class="links">
+        <strong>Quick Links:</strong><br>
+        <a href="/docs" target="_blank">API Documentation</a>
+        <a href="/stats">Stats</a>
+        <a href="/vehicle-state">Vehicle State</a>
+        <a href="/trip/summary">Trip Summary</a>
+    </div>
+
+    <div class="data-container">
+        <h2>Latest Reading:</h2>
+        <pre id="latest-data">Click "Fetch Latest Reading" or wait for auto-update...</pre>
+    </div>
+
+    <script>
+        // Auto-update interval (in milliseconds)
+        const UPDATE_INTERVAL = 1000; // 1 second
+
+        // Reference to the data display element
+        const dataElement = document.getElementById('latest-data');
+        const statusElement = document.getElementById('status');
+
+        // Function to fetch the latest reading from the API
+        function fetchLatest() {
+            fetch('/latest')
+                .then(response => response.json())
+                .then(data => {
+                    // Format and display the JSON data
+                    dataElement.textContent = JSON.stringify(data, null, 2);
+
+                    // Update status indicator
+                    statusElement.textContent = 'Live updating (every 1s)';
+                    statusElement.className = 'status active';
+                })
+                .catch(error => {
+                    dataElement.textContent = 'Error fetching data: ' + error.message;
+                    statusElement.textContent = 'Update failed';
+                    statusElement.className = 'status inactive';
+                });
+        }
+
+        // Start auto-updating when page loads
+        setInterval(fetchLatest, UPDATE_INTERVAL);
+
+        // Fetch immediately on page load
+        fetchLatest();
+    </script>
+</body>
+</html>
