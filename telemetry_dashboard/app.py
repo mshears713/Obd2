@@ -13,17 +13,32 @@ except ImportError:  # Fallback if the helper is unavailable
 
 def get_latest_data(base_url: str):
     try:
-        response = requests.get(f"{base_url.rstrip('/')}/readings?limit=1", timeout=5)
+        response = requests.get(f"{base_url.rstrip('/')}/latest", timeout=5)
         if response.ok:
             data = response.json()
-            if data and len(data) > 0:
+            latest = None
+            if isinstance(data, dict):
+                latest = data
+            elif isinstance(data, list) and len(data) > 0:
                 latest = data[0]
+
+            if isinstance(latest, dict):
                 rpm_value = latest.get("rpm")
                 throttle_value = latest.get("throttle_pct")
-                engine_load_value = latest.get("load_pct")
+                engine_load_value = latest.get("engine_load")
                 coolant_temp_value = latest.get("coolant_temp_f")
+                maf_value = latest.get("maf")
+                speed_value = latest.get("speed_mph")
+
                 if not isinstance(coolant_temp_value, (int, float)):
                     coolant_temp_value = latest.get("coolant_temp")
+
+                if not isinstance(speed_value, (int, float)):
+                    speed_value = latest.get("speed")
+
+                if not isinstance(engine_load_value, (int, float)):
+                    engine_load_value = latest.get("load_pct")
+
                 if not isinstance(rpm_value, (int, float)):
                     rpm_value = 0
                 if not isinstance(throttle_value, (int, float)):
@@ -36,12 +51,29 @@ def get_latest_data(base_url: str):
                     coolant_temp_value = float(coolant_temp_value)
                 else:
                     coolant_temp_value = None
-                return latest, rpm_value, throttle_value, engine_load_value, coolant_temp_value
+                if isinstance(maf_value, (int, float)):
+                    maf_value = float(maf_value)
+                else:
+                    maf_value = None
+                if isinstance(speed_value, (int, float)):
+                    speed_value = float(speed_value)
+                else:
+                    speed_value = None
+
+                return (
+                    latest,
+                    rpm_value,
+                    throttle_value,
+                    engine_load_value,
+                    coolant_temp_value,
+                    maf_value,
+                    speed_value,
+                )
     except RequestException:
         pass
     except ValueError:
         pass
-    return None, 0, 0, None, None
+    return None, 0, 0, None, None, None, None
 
 st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
 
@@ -80,10 +112,17 @@ with st.container():
     indicator_placeholder = st.empty()
     timestamp_placeholder = st.empty()
 
-    latest_data, rpm_value, throttle_value, engine_load_value, coolant_temp_value = get_latest_data(base_url)
+    (
+        latest_data,
+        rpm_value,
+        throttle_value,
+        engine_load_value,
+        coolant_temp_value,
+        maf_value,
+        speed_value,
+    ) = get_latest_data(base_url)
 
     if latest_data is not None:
-        speed_value = latest_data.get("speed_mph")
         if isinstance(speed_value, (int, float)):
             # Convert mph to km/h
             speed_kmh = speed_value * 1.60934
@@ -178,6 +217,50 @@ with st.container():
             st.markdown("**Coolant Temp:** N/A", unsafe_allow_html=True)
 
         st.caption(note_message)
+
+        with st.container():
+            st.markdown("### Efficiency Metrics")
+
+            maf_for_display = maf_value if isinstance(maf_value, (int, float)) else 0.0
+            progress_value = int(max(0, min(maf_for_display / 5, 100)))
+
+            if isinstance(maf_value, (int, float)):
+                st.write(f"Mass Airflow: {maf_for_display:.2f} g/s")
+            else:
+                st.write("Mass Airflow: N/A")
+            st.progress(progress_value)
+
+            mpg_est = 0.0
+            if isinstance(maf_value, (int, float)) and maf_value > 0 and isinstance(speed_value, (int, float)):
+                mpg_est = speed_value / (maf_value * 0.08)
+                st.metric(label="Estimated MPG", value=f"{mpg_est:.1f}")
+                if mpg_est > 30:
+                    status_color = "green"
+                    status_note = "Efficient"
+                elif mpg_est >= 15:
+                    status_color = "orange"
+                    status_note = "Average"
+                else:
+                    status_color = "red"
+                    status_note = "Inefficient"
+                st.markdown(
+                    f"<span style='color:{status_color};'>Status: {status_note}</span>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.metric(label="Estimated MPG", value="N/A")
+                st.markdown(
+                    "<span style='color:gray;'>Status: Data needed</span>",
+                    unsafe_allow_html=True,
+                )
+
+            with st.expander("Efficiency Debug"):
+                speed_debug = f"{speed_value:.1f}" if isinstance(speed_value, (int, float)) else "N/A"
+                maf_debug = f"{maf_for_display:.2f}" if isinstance(maf_value, (int, float)) else "N/A"
+                mpg_debug = f"{mpg_est:.1f}" if mpg_est > 0 else "N/A"
+                st.write(f"Speed (mph): {speed_debug}")
+                st.write(f"Mass Airflow (g/s): {maf_debug}")
+                st.write(f"Estimated MPG: {mpg_debug}")
 
     with st.expander("Debug JSON"):
         if latest_data is not None:
