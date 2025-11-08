@@ -13,7 +13,7 @@ except ImportError:  # Fallback if the helper is unavailable
 
 def get_latest_data(base_url: str):
     try:
-        response = requests.get(f"{base_url.rstrip('/')}/latest", timeout=5)
+        response = requests.get(f"{base_url.rstrip('/')}/readings?limit=1", timeout=5)
         if response.ok:
             data = response.json()
             latest = None
@@ -25,9 +25,9 @@ def get_latest_data(base_url: str):
             if isinstance(latest, dict):
                 rpm_value = latest.get("rpm")
                 throttle_value = latest.get("throttle_pct")
-                engine_load_value = latest.get("engine_load")
+                engine_load_value = latest.get("load_pct")
                 coolant_temp_value = latest.get("coolant_temp_f")
-                maf_value = latest.get("maf")
+                maf_value = latest.get("maf_gps")
                 speed_value = latest.get("speed_mph")
 
                 if not isinstance(coolant_temp_value, (int, float)):
@@ -36,8 +36,7 @@ def get_latest_data(base_url: str):
                 if not isinstance(speed_value, (int, float)):
                     speed_value = latest.get("speed")
 
-                if not isinstance(engine_load_value, (int, float)):
-                    engine_load_value = latest.get("load_pct")
+                # engine_load_value already set to load_pct above
 
                 if not isinstance(rpm_value, (int, float)):
                     rpm_value = 0
@@ -222,7 +221,7 @@ with st.container():
             st.markdown("### Efficiency Metrics")
 
             maf_for_display = maf_value if isinstance(maf_value, (int, float)) else 0.0
-            progress_value = int(max(0, min(maf_for_display / 5, 100)))
+            progress_value = int(max(0, min((maf_for_display / 20) * 100, 100)))
 
             if isinstance(maf_value, (int, float)):
                 st.write(f"Mass Airflow: {maf_for_display:.2f} g/s")
