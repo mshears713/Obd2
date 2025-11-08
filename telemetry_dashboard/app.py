@@ -19,7 +19,7 @@ def get_latest_data(base_url: str):
             if data and len(data) > 0:
                 latest = data[0]
                 rpm_value = latest.get("rpm")
-                throttle_value = latest.get("throttle")
+                throttle_value = latest.get("throttle_pct")
                 engine_load_value = latest.get("engine_load")
                 coolant_temp_value = latest.get("coolant_temp_f")
                 if not isinstance(coolant_temp_value, (int, float)):
@@ -107,12 +107,12 @@ with st.container():
                 value=rpm_value if latest_data is not None else 0,
                 title={"text": "RPM"},
                 gauge={
-                    "axis": {"range": [0, 8000]},
+                    "axis": {"range": [0, 2500]},
                     "bar": {"color": "orange"},
                     "steps": [
-                        {"range": [0, 3000], "color": "lightgreen"},
-                        {"range": [3000, 6000], "color": "yellow"},
-                        {"range": [6000, 8000], "color": "red"},
+                        {"range": [0, 1000], "color": "lightgreen"},
+                        {"range": [1000, 2000], "color": "yellow"},
+                        {"range": [2000, 2500], "color": "red"},
                     ],
                 },
             )
