@@ -11,9 +11,11 @@ except ImportError:  # Fallback if the helper is unavailable
 
 def get_latest_data(base_url: str):
     try:
-        response = requests.get(f"{base_url.rstrip('/')}/latest", timeout=5)
+        response = requests.get(f"{base_url.rstrip('/')}/readings?limit=1", timeout=5)
         if response.ok:
-            return response.json()
+            data = response.json()
+            if data and len(data) > 0:
+                return data[0]  # Return the most recent reading
     except RequestException:
         pass
     except ValueError:
@@ -60,9 +62,11 @@ with st.container():
     latest_data = get_latest_data(base_url)
 
     if latest_data is not None:
-        speed_value = latest_data.get("speed")
+        speed_value = latest_data.get("speed_mph")
         if isinstance(speed_value, (int, float)):
-            display_speed = f"{speed_value:.1f}"
+            # Convert mph to km/h
+            speed_kmh = speed_value * 1.60934
+            display_speed = f"{speed_kmh:.1f}"
         else:
             display_speed = "N/A"
         metric_placeholder.metric(label="Speed (km/h)", value=display_speed)
