@@ -1,8 +1,9 @@
 import time
+import pandas as pd
+import streamlit as st
 
 import requests
 from requests.exceptions import RequestException
-import streamlit as st
 import plotly.graph_objects as go
 import math
 try:
@@ -76,6 +77,15 @@ def get_latest_data(base_url: str):
     return None, 0, 0, None, None, None, None
 
 st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
+
+if "trip_active" not in st.session_state:
+    st.session_state.trip_active = False
+if "trip_start_time" not in st.session_state:
+    st.session_state.trip_start_time = None
+if "trip_data" not in st.session_state:
+    st.session_state.trip_data = []
+if "distance_miles" not in st.session_state:
+    st.session_state.distance_miles = 0.0
 
 st.markdown(
     "<h1 style='text-align:center;'>🚗 Vehicle Telemetry Dashboard</h1>",
@@ -233,6 +243,62 @@ with live_container:
         st.plotly_chart(fig_throttle, use_container_width=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
+
+trip_container = st.container()
+
+with trip_container:
+    st.markdown("### Trip Monitor")
+
+    col1, col2, col3 = st.columns(3)
+    start = col1.button("▶️ Start Trip")
+    stop = col2.button("⏹️ Stop Trip")
+    reset = col3.button("🔄 Reset")
+
+    if start and not st.session_state.trip_active:
+        st.session_state.trip_active = True
+        st.session_state.trip_start_time = time.time()
+    if stop and st.session_state.trip_active:
+        st.session_state.trip_active = False
+    if reset:
+        st.session_state.trip_active = False
+        st.session_state.trip_start_time = None
+        st.session_state.trip_data = []
+        st.session_state.distance_miles = 0.0
+
+    current_time = time.time()
+    if st.session_state.trip_active and isinstance(speed_value, (int, float)):
+        st.session_state.trip_data.append((current_time, speed_value))
+        st.session_state.trip_data = st.session_state.trip_data[-300:]
+        st.session_state.distance_miles += (speed_value / 3600.0) * refresh_rate
+
+    elapsed_seconds = 0.0
+    if st.session_state.trip_start_time is not None:
+        if st.session_state.trip_active:
+            elapsed_seconds = current_time - st.session_state.trip_start_time
+        elif st.session_state.trip_data:
+            last_time = st.session_state.trip_data[-1][0]
+            elapsed_seconds = last_time - st.session_state.trip_start_time
+
+    elapsed_minutes = int(elapsed_seconds // 60)
+    elapsed_remain = int(elapsed_seconds % 60)
+    elapsed_display = f"{elapsed_minutes:02d}:{elapsed_remain:02d}"
+
+    avg_speed = 0.0
+    if st.session_state.trip_data:
+        speeds = [speed for _, speed in st.session_state.trip_data]
+        avg_speed = sum(speeds) / len(speeds)
+
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("Elapsed Time", elapsed_display)
+    metric_cols[1].metric("Distance (mi)", f"{st.session_state.distance_miles:.1f}")
+    metric_cols[2].metric("Avg Speed (mph)", f"{avg_speed:.1f}")
+
+    if st.session_state.trip_data:
+        df = pd.DataFrame(st.session_state.trip_data, columns=["time", "speed"])
+        df["time"] = pd.to_datetime(df["time"], unit="s")
+        st.line_chart(df.set_index("time")["speed"], height=100)
+    else:
+        st.caption("Start a trip to see recent speed history.")
 
 engine_container = st.container()
 
