@@ -1,6 +1,7 @@
 import requests
 import time
 import streamlit as st
+import plotly.graph_objects as go
 from requests.exceptions import RequestException
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -15,12 +16,19 @@ def get_latest_data(base_url: str):
         if response.ok:
             data = response.json()
             if data and len(data) > 0:
-                return data[0]  # Return the most recent reading
+                latest = data[0]
+                rpm_value = latest.get("rpm")
+                throttle_value = latest.get("throttle")
+                if not isinstance(rpm_value, (int, float)):
+                    rpm_value = 0
+                if not isinstance(throttle_value, (int, float)):
+                    throttle_value = 0
+                return latest, rpm_value, throttle_value
     except RequestException:
         pass
     except ValueError:
         pass
-    return None
+    return None, 0, 0
 
 st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
 
@@ -59,7 +67,7 @@ with st.container():
     indicator_placeholder = st.empty()
     timestamp_placeholder = st.empty()
 
-    latest_data = get_latest_data(base_url)
+    latest_data, rpm_value, throttle_value = get_latest_data(base_url)
 
     if latest_data is not None:
         speed_value = latest_data.get("speed_mph")
@@ -76,6 +84,41 @@ with st.container():
         metric_placeholder.metric(label="Speed (km/h)", value="—")
         indicator_placeholder.markdown("❌ Disconnected")
         timestamp_placeholder.caption("Last update: —")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig_rpm = go.Figure(
+            go.Indicator(
+                mode="gauge+number",
+                value=rpm_value if latest_data is not None else 0,
+                title={"text": "RPM"},
+                gauge={
+                    "axis": {"range": [0, 8000]},
+                    "bar": {"color": "orange"},
+                    "steps": [
+                        {"range": [0, 3000], "color": "lightgreen"},
+                        {"range": [3000, 6000], "color": "yellow"},
+                        {"range": [6000, 8000], "color": "red"},
+                    ],
+                },
+            )
+        )
+        st.plotly_chart(fig_rpm, use_container_width=True)
+
+    with col2:
+        fig_throttle = go.Figure(
+            go.Indicator(
+                mode="gauge+number",
+                value=throttle_value if latest_data is not None else 0,
+                title={"text": "Throttle (%)"},
+                gauge={
+                    "axis": {"range": [0, 100]},
+                    "bar": {"color": "skyblue"},
+                },
+            )
+        )
+        st.plotly_chart(fig_throttle, use_container_width=True)
 
     with st.expander("Debug JSON"):
         if latest_data is not None:
