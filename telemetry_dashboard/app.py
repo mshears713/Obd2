@@ -76,6 +76,16 @@ def get_latest_data(base_url: str):
         pass
     return None, 0, 0, None, None, None, None
 
+
+def get_range_data(base_url: str, minutes: int):
+    try:
+        resp = requests.get(f"{base_url.rstrip('/')}/range?minutes={minutes}", timeout=5)
+        if resp.status_code == 200:
+            return pd.DataFrame(resp.json())
+        return None
+    except RequestException:
+        return None
+
 st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
 
 if "trip_active" not in st.session_state:
@@ -430,6 +440,32 @@ with trip_container:
         st.plotly_chart(fig_speed_history, use_container_width=True)
     else:
         st.caption("Start a trip to see recent speed history.")
+
+st.markdown("### History")
+timeframe = st.selectbox("Select Time Range", ["Last 5 min", "Last 15 min", "Last 30 min", "Last 60 min"])
+window_minutes = int(timeframe.split()[1])
+
+history_df = get_range_data(base_url, window_minutes)
+
+if history_df is not None and not history_df.empty:
+    if "speed" not in history_df.columns and "speed_mph" in history_df.columns:
+        history_df["speed"] = history_df["speed_mph"]
+    if "coolant_temp_f" not in history_df.columns and "coolant_temp" in history_df.columns:
+        history_df["coolant_temp_f"] = history_df["coolant_temp"]
+
+    required_columns = {"timestamp", "speed", "rpm", "coolant_temp_f"}
+
+    if required_columns.issubset(history_df.columns):
+        history_df["timestamp"] = pd.to_datetime(history_df["timestamp"])
+        history_df.set_index("timestamp", inplace=True)
+
+        st.line_chart(history_df["speed"], height=150)
+        st.line_chart(history_df["rpm"], height=150)
+        st.line_chart(history_df["coolant_temp_f"], height=150)
+    else:
+        st.warning("No data available for this range.")
+else:
+    st.warning("No data available for this range.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
