@@ -4,6 +4,7 @@ import requests
 from requests.exceptions import RequestException
 import streamlit as st
 import plotly.graph_objects as go
+import math
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:  # Fallback if the helper is unavailable
@@ -76,16 +77,15 @@ def get_latest_data(base_url: str):
 
 st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
 
-header_container = st.container()
-with header_container:
-    st.markdown(
-        "<h1 style='text-align: center;'>Vehicle Telemetry Dashboard</h1>",
-        unsafe_allow_html=True,
-    )
+st.markdown(
+    "<h1 style='text-align:center;'>🚗 Vehicle Telemetry Dashboard</h1>",
+    unsafe_allow_html=True,
+)
+st.markdown("---")
 
 st.sidebar.header("Connection Settings")
 base_url = st.sidebar.text_input("Base API URL", "http://127.0.0.1:8000")
-refresh_rate = st.sidebar.number_input("Refresh Rate (seconds)", min_value=1, value=5)
+refresh_rate = st.sidebar.number_input("Refresh Rate (seconds)", min_value=1, value=3)
 
 st.sidebar.subheader("Backend")
 check_health = st.sidebar.button("Check /health")
@@ -103,179 +103,244 @@ if check_health:
 else:
     status_placeholder.info("Press the button to test the API.")
 
-with st.container():
-    st.subheader("Live Data")
-    refresh_ms = max(int(refresh_rate * 1000), 1000)
-    st_autorefresh(interval=refresh_ms, key="refresh")
-    metric_placeholder = st.empty()
-    indicator_placeholder = st.empty()
-    timestamp_placeholder = st.empty()
+live_container = st.container()
 
-    (
-        latest_data,
-        rpm_value,
-        throttle_value,
-        engine_load_value,
-        coolant_temp_value,
-        maf_value,
-        speed_value,
-    ) = get_latest_data(base_url)
+refresh_ms = max(int(refresh_rate * 1000), 1000)
+st_autorefresh(interval=refresh_ms, key="refresh")
 
-    if latest_data is not None:
-        if isinstance(speed_value, (int, float)):
-            # Convert mph to km/h
-            speed_kmh = speed_value * 1.60934
-            display_speed = f"{speed_kmh:.1f}"
-        else:
-            display_speed = "N/A"
-        metric_placeholder.metric(label="Speed (km/h)", value=display_speed)
-        indicator_placeholder.markdown("✅ Connected")
-        timestamp_placeholder.caption(f"Last update: {time.strftime('%H:%M:%S')}")
+(
+    latest_data,
+    rpm_value,
+    throttle_value,
+    engine_load_value,
+    coolant_temp_value,
+    maf_value,
+    speed_value,
+) = get_latest_data(base_url)
+
+with live_container:
+    st.markdown("### Live Data")
+
+    if latest_data is not None and isinstance(speed_value, (int, float)):
+        speed_kmh = speed_value * 1.60934
+        speed_display = f"{speed_kmh:.1f}"
     else:
-        metric_placeholder.metric(label="Speed (km/h)", value="—")
-        indicator_placeholder.markdown("❌ Disconnected")
-        timestamp_placeholder.caption("Last update: —")
+        speed_display = "—"
 
-    col1, col2 = st.columns(2)
+    connection_text = "✅ Connected" if latest_data is not None else "❌ Disconnected"
+    timestamp_text = (
+        f"Last update: {time.strftime('%H:%M:%S')}"
+        if latest_data is not None
+        else "Last update: —"
+    )
 
-    with col1:
-        fig_rpm = go.Figure(
+    status_cols = st.columns([1, 1])
+    with status_cols[0]:
+        st.markdown(connection_text)
+    with status_cols[1]:
+        st.caption(timestamp_text)
+
+    # Racing-Style HUD Speed Display
+    st.markdown(
+        f"""
+        <div style='text-align: center; background: linear-gradient(45deg, #1e3c72, #2a5298);
+                    border-radius: 15px; padding: 20px; margin: 20px 0;
+                    box-shadow: 0 0 20px rgba(0,255,255,0.3);'>
+            <div style='color: #00ffff; font-family: "Orbitron", monospace; font-size: 14px;
+                        text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;'>
+                🏁 SPEED TELEMETRY 🏁
+            </div>
+            <div style='display: flex; justify-content: center; gap: 30px; align-items: center;'>
+                <div>
+                    <div style='color: #ffffff; font-size: 48px; font-weight: bold;
+                                text-shadow: 0 0 10px #00ffff;'>{speed_display}</div>
+                    <div style='color: #00ffff; font-size: 16px;'>KM/H</div>
+                </div>
+                <div style='border-left: 2px solid #00ffff; padding-left: 20px;'>
+                    <div style='color: #ffffff; font-size: 24px; font-weight: bold;'>
+                        {speed_value * 0.621371 if isinstance(speed_value, (int, float)) else 0:.1f}
+                    </div>
+                    <div style='color: #00ffff; font-size: 12px;'>MPH</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    gauge_col_left, gauge_col_right = st.columns(2)
+
+    with gauge_col_left:
+        # Digital LED-Style RPM Display
+        rpm_display_value = rpm_value if latest_data is not None else 0
+        rpm_color = "#ff0000" if rpm_display_value > 2000 else "#ffff00" if rpm_display_value > 1000 else "#00ff00"
+
+        st.markdown(
+            f"""
+            <div style='text-align: center; background: #000000; border: 3px solid {rpm_color};
+                        border-radius: 10px; padding: 20px; margin: 10px 0;
+                        box-shadow: 0 0 20px {rpm_color};'>
+                <div style='color: {rpm_color}; font-family: "Digital-7", monospace;
+                            font-size: 48px; font-weight: bold;
+                            text-shadow: 0 0 10px {rpm_color}; letter-spacing: 3px;'>
+                    {rpm_display_value:04.0f}
+                </div>
+                <div style='color: {rpm_color}; font-size: 16px; font-family: "Orbitron", monospace;
+                            letter-spacing: 2px; margin-top: 5px;'>
+                    ▲ RPM ▲
+                </div>
+                <div style='margin-top: 10px;'>
+                    {'🔴' * int(rpm_display_value / 250) + '⚫' * (10 - int(rpm_display_value / 250))}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with gauge_col_right:
+        # Classic Speedometer-Style Throttle Gauge
+        fig_throttle = go.Figure(
             go.Indicator(
-                mode="gauge+number",
-                value=rpm_value if latest_data is not None else 0,
-                title={"text": "RPM"},
+                mode="gauge+number+delta",
+                value=throttle_value if latest_data is not None else 0,
+                title={"text": "Throttle Position", "font": {"size": 18, "color": "white"}},
+                number={"font": {"size": 28, "color": "white"}},
                 gauge={
-                    "axis": {"range": [0, 2500]},
-                    "bar": {"color": "orange"},
+                    "axis": {"range": [0, 100], "tickwidth": 2, "tickcolor": "white"},
+                    "bar": {"color": "rgba(255, 255, 255, 0.8)", "thickness": 0.8},
+                    "bgcolor": "rgba(0, 0, 0, 0.8)",
+                    "borderwidth": 3,
+                    "bordercolor": "gold",
                     "steps": [
-                        {"range": [0, 1000], "color": "lightgreen"},
-                        {"range": [1000, 2000], "color": "yellow"},
-                        {"range": [2000, 2500], "color": "red"},
+                        {"range": [0, 25], "color": "rgba(0, 255, 0, 0.3)"},
+                        {"range": [25, 50], "color": "rgba(255, 255, 0, 0.3)"},
+                        {"range": [50, 75], "color": "rgba(255, 165, 0, 0.3)"},
+                        {"range": [75, 100], "color": "rgba(255, 0, 0, 0.3)"},
                     ],
+                    "threshold": {
+                        "line": {"color": "red", "width": 4},
+                        "thickness": 0.75,
+                        "value": 90,
+                    },
                 },
             )
         )
-        st.plotly_chart(fig_rpm, use_container_width=True)
-
-    with col2:
-        fig_throttle = go.Figure(
-            go.Indicator(
-                mode="gauge+number",
-                value=throttle_value if latest_data is not None else 0,
-                title={"text": "Throttle (%)"},
-                gauge={
-                    "axis": {"range": [0, 100]},
-                    "bar": {"color": "skyblue"},
-                },
-            )
+        fig_throttle.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": "white", "family": "Arial Black"},
         )
         st.plotly_chart(fig_throttle, use_container_width=True)
 
-    with st.container():
-        st.subheader("Engine Health")
+st.markdown("<br>", unsafe_allow_html=True)
 
-        load_display = "N/A"
-        load_progress = 0
-        coolant_display = "N/A"
-        coolant_state = "<span style='color:gray;'>N/A</span>"
-        note_message = "Data unavailable."
+engine_container = st.container()
 
-        try:
-            if latest_data is not None:
-                if isinstance(engine_load_value, (int, float)):
-                    load_display = f"{engine_load_value:.1f}%"
-                    load_progress = int(max(0, min(engine_load_value, 100)))
-                else:
-                    load_progress = 0
+with engine_container:
+    st.markdown("### Engine Health")
 
-                if isinstance(coolant_temp_value, (int, float)):
-                    if coolant_temp_value < 160:
-                        coolant_state = "<span style='color:blue;'>🧊 Cool</span>"
-                        note_message = "Engine warming up."
-                    elif coolant_temp_value <= 210:
-                        coolant_state = "<span style='color:green;'>✅ Normal</span>"
-                        note_message = "Engine operating normally."
-                    else:
-                        coolant_state = "<span style='color:red;'>🔥 Hot</span>"
-                        note_message = "Monitor cooling system."
-                    coolant_display = f"{coolant_temp_value:.1f}°F"
-                else:
-                    note_message = "Data unavailable."
-        except Exception:
-            note_message = "Data unavailable."
+    load_display = "N/A"
+    load_progress = 0
+    coolant_display = "N/A"
+    coolant_state = "<span style='color:gray;'>N/A</span>"
+    note_message = "Data unavailable."
 
-        st.write(f"Engine Load: {load_display}")
-        st.progress(load_progress)
+    if latest_data is not None:
+        if isinstance(engine_load_value, (int, float)):
+            load_display = f"{engine_load_value:.1f}%"
+            load_progress = int(max(0, min(engine_load_value, 100)))
 
-        if coolant_display != "N/A":
-            st.markdown(
-                f"**Coolant Temp:** {coolant_display} — {coolant_state}",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown("**Coolant Temp:** N/A", unsafe_allow_html=True)
-
-        st.caption(note_message)
-
-        with st.container():
-            st.markdown("### Efficiency Metrics")
-
-            maf_for_display = maf_value if isinstance(maf_value, (int, float)) else 0.0
-            progress_value = int(max(0, min((maf_for_display / 20) * 100, 100)))
-
-            if isinstance(maf_value, (int, float)):
-                st.write(f"Mass Airflow: {maf_for_display:.2f} g/s")
+        if isinstance(coolant_temp_value, (int, float)):
+            if coolant_temp_value < 160:
+                coolant_state = "<span style='color:blue;'>🧊 Cool</span>"
+                note_message = "Engine warming up."
+            elif coolant_temp_value <= 210:
+                coolant_state = "<span style='color:green;'>✅ Normal</span>"
+                note_message = "Engine operating normally."
             else:
-                st.write("Mass Airflow: N/A")
-            st.progress(progress_value)
+                coolant_state = "<span style='color:red;'>🔥 Hot</span>"
+                note_message = "Monitor cooling system."
+            coolant_display = f"{coolant_temp_value:.1f}°F"
 
-            mpg_est = 0.0
-            if isinstance(maf_value, (int, float)) and maf_value > 0 and isinstance(speed_value, (int, float)):
-                mpg_est = speed_value / (maf_value * 0.08)
-                st.metric(label="Estimated MPG", value=f"{mpg_est:.1f}")
-                if mpg_est > 30:
-                    status_color = "green"
-                    status_note = "Efficient"
-                elif mpg_est >= 15:
-                    status_color = "orange"
-                    status_note = "Average"
-                else:
-                    status_color = "red"
-                    status_note = "Inefficient"
-                st.markdown(
-                    f"<span style='color:{status_color};'>Status: {status_note}</span>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.metric(label="Estimated MPG", value="N/A")
-                st.markdown(
-                    "<span style='color:gray;'>Status: Data needed</span>",
-                    unsafe_allow_html=True,
-                )
+    st.write(f"Engine Load: {load_display}")
+    st.progress(load_progress)
 
-            with st.expander("Efficiency Debug"):
-                speed_debug = f"{speed_value:.1f}" if isinstance(speed_value, (int, float)) else "N/A"
-                maf_debug = f"{maf_for_display:.2f}" if isinstance(maf_value, (int, float)) else "N/A"
-                mpg_debug = f"{mpg_est:.1f}" if mpg_est > 0 else "N/A"
-                st.write(f"Speed (mph): {speed_debug}")
-                st.write(f"Mass Airflow (g/s): {maf_debug}")
-                st.write(f"Estimated MPG: {mpg_debug}")
+    if coolant_display != "N/A":
+        st.markdown(
+            f"**Coolant Temp:** {coolant_display} — {coolant_state}",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("**Coolant Temp:** N/A", unsafe_allow_html=True)
 
-    with st.expander("Debug JSON"):
-        if latest_data is not None:
-            st.json(latest_data)
+    st.caption(note_message)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+efficiency_container = st.container()
+
+with efficiency_container:
+    st.markdown("### Efficiency Metrics")
+
+    maf_for_display = maf_value if isinstance(maf_value, (int, float)) else 0.0
+    maf_progress = int(max(0, min((maf_for_display / 20) * 100, 100)))
+
+    if isinstance(maf_value, (int, float)):
+        st.write(f"Mass Airflow: {maf_for_display:.2f} g/s")
+    else:
+        st.write("Mass Airflow: N/A")
+    st.progress(maf_progress)
+
+    mpg_display = "N/A"
+    status_color = "gray"
+    status_note = "Data needed"
+    mpg_est = 0.0
+
+    if (
+        isinstance(maf_value, (int, float))
+        and maf_value > 0
+        and isinstance(speed_value, (int, float))
+    ):
+        mpg_est = speed_value / (maf_value * 0.08)
+        mpg_display = f"{mpg_est:.1f}"
+        if mpg_est > 30:
+            status_color = "green"
+            status_note = "Efficient"
+        elif mpg_est >= 15:
+            status_color = "orange"
+            status_note = "Average"
         else:
-            st.write("No data received.")
+            status_color = "red"
+            status_note = "Inefficient"
 
+    st.metric(label="Estimated MPG", value=mpg_display)
+    st.markdown(
+        f"<span style='color:{status_color};'>Status: {status_note}</span>",
+        unsafe_allow_html=True,
+    )
 
-with st.container():
-    st.subheader("Trip Monitor")
-    st.write("Coming soon...")
+    with st.expander("Efficiency Debug"):
+        speed_debug = (
+            f"{speed_value:.1f}" if isinstance(speed_value, (int, float)) else "N/A"
+        )
+        maf_debug = (
+            f"{maf_for_display:.2f}" if isinstance(maf_value, (int, float)) else "N/A"
+        )
+        mpg_debug = f"{mpg_est:.1f}" if mpg_est > 0 else "N/A"
+        st.write(f"Speed (mph): {speed_debug}")
+        st.write(f"Mass Airflow (g/s): {maf_debug}")
+        st.write(f"Estimated MPG: {mpg_debug}")
 
-with st.container():
-    st.subheader("System Status")
-    st.write("Coming soon...")
+st.markdown("<br>", unsafe_allow_html=True)
 
-footer_container = st.container()
-with footer_container:
-    st.markdown("<p style='text-align: center;'>© 2025 Vehicle Telemetry Dashboard</p>", unsafe_allow_html=True)
+with st.expander("Debug JSON"):
+    if latest_data is not None:
+        st.json(latest_data)
+    else:
+        st.write("No data received.")
+
+st.markdown("<hr>", unsafe_allow_html=True)
+st.markdown(
+    "<p style='text-align:center; font-size:12px;'>© 2025 Vehicle Telemetry Dashboard</p>",
+    unsafe_allow_html=True,
+)
