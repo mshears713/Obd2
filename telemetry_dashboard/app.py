@@ -1,8 +1,9 @@
-import requests
 import time
+
+import requests
+from requests.exceptions import RequestException
 import streamlit as st
 import plotly.graph_objects as go
-from requests.exceptions import RequestException
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:  # Fallback if the helper is unavailable
@@ -19,16 +20,28 @@ def get_latest_data(base_url: str):
                 latest = data[0]
                 rpm_value = latest.get("rpm")
                 throttle_value = latest.get("throttle")
+                engine_load_value = latest.get("engine_load")
+                coolant_temp_value = latest.get("coolant_temp_f")
+                if not isinstance(coolant_temp_value, (int, float)):
+                    coolant_temp_value = latest.get("coolant_temp")
                 if not isinstance(rpm_value, (int, float)):
                     rpm_value = 0
                 if not isinstance(throttle_value, (int, float)):
                     throttle_value = 0
-                return latest, rpm_value, throttle_value
+                if isinstance(engine_load_value, (int, float)):
+                    engine_load_value = float(engine_load_value)
+                else:
+                    engine_load_value = None
+                if isinstance(coolant_temp_value, (int, float)):
+                    coolant_temp_value = float(coolant_temp_value)
+                else:
+                    coolant_temp_value = None
+                return latest, rpm_value, throttle_value, engine_load_value, coolant_temp_value
     except RequestException:
         pass
     except ValueError:
         pass
-    return None, 0, 0
+    return None, 0, 0, None, None
 
 st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
 
@@ -67,7 +80,7 @@ with st.container():
     indicator_placeholder = st.empty()
     timestamp_placeholder = st.empty()
 
-    latest_data, rpm_value, throttle_value = get_latest_data(base_url)
+    latest_data, rpm_value, throttle_value, engine_load_value, coolant_temp_value = get_latest_data(base_url)
 
     if latest_data is not None:
         speed_value = latest_data.get("speed_mph")
@@ -119,6 +132,52 @@ with st.container():
             )
         )
         st.plotly_chart(fig_throttle, use_container_width=True)
+
+    with st.container():
+        st.subheader("Engine Health")
+
+        load_display = "N/A"
+        load_progress = 0
+        coolant_display = "N/A"
+        coolant_state = "<span style='color:gray;'>N/A</span>"
+        note_message = "Data unavailable."
+
+        try:
+            if latest_data is not None:
+                if isinstance(engine_load_value, (int, float)):
+                    load_display = f"{engine_load_value:.1f}%"
+                    load_progress = int(max(0, min(engine_load_value, 100)))
+                else:
+                    load_progress = 0
+
+                if isinstance(coolant_temp_value, (int, float)):
+                    if coolant_temp_value < 160:
+                        coolant_state = "<span style='color:blue;'>🧊 Cool</span>"
+                        note_message = "Engine warming up."
+                    elif coolant_temp_value <= 210:
+                        coolant_state = "<span style='color:green;'>✅ Normal</span>"
+                        note_message = "Engine operating normally."
+                    else:
+                        coolant_state = "<span style='color:red;'>🔥 Hot</span>"
+                        note_message = "Monitor cooling system."
+                    coolant_display = f"{coolant_temp_value:.1f}°F"
+                else:
+                    note_message = "Data unavailable."
+        except Exception:
+            note_message = "Data unavailable."
+
+        st.write(f"Engine Load: {load_display}")
+        st.progress(load_progress)
+
+        if coolant_display != "N/A":
+            st.markdown(
+                f"**Coolant Temp:** {coolant_display} — {coolant_state}",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown("**Coolant Temp:** N/A", unsafe_allow_html=True)
+
+        st.caption(note_message)
 
     with st.expander("Debug JSON"):
         if latest_data is not None:
