@@ -20,7 +20,7 @@ def get_latest_data(base_url: str):
                 latest = data[0]
                 rpm_value = latest.get("rpm")
                 throttle_value = latest.get("throttle_pct")
-                engine_load_value = latest.get("engine_load")
+                engine_load_value = latest.get("load_pct")
                 coolant_temp_value = latest.get("coolant_temp_f")
                 if not isinstance(coolant_temp_value, (int, float)):
                     coolant_temp_value = latest.get("coolant_temp")
