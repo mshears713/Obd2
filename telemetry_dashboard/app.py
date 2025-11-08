@@ -4,6 +4,7 @@ import requests
 from requests.exceptions import RequestException
 import streamlit as st
 import plotly.graph_objects as go
+import math
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:  # Fallback if the helper is unavailable
@@ -139,42 +140,95 @@ with live_container:
     with status_cols[1]:
         st.caption(timestamp_text)
 
-    speed_cols = st.columns([1, 1, 1])
-    with speed_cols[1]:
-        st.metric(label="Speed (km/h)", value=speed_display)
+    # Racing-Style HUD Speed Display
+    st.markdown(
+        f"""
+        <div style='text-align: center; background: linear-gradient(45deg, #1e3c72, #2a5298);
+                    border-radius: 15px; padding: 20px; margin: 20px 0;
+                    box-shadow: 0 0 20px rgba(0,255,255,0.3);'>
+            <div style='color: #00ffff; font-family: "Orbitron", monospace; font-size: 14px;
+                        text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;'>
+                🏁 SPEED TELEMETRY 🏁
+            </div>
+            <div style='display: flex; justify-content: center; gap: 30px; align-items: center;'>
+                <div>
+                    <div style='color: #ffffff; font-size: 48px; font-weight: bold;
+                                text-shadow: 0 0 10px #00ffff;'>{speed_display}</div>
+                    <div style='color: #00ffff; font-size: 16px;'>KM/H</div>
+                </div>
+                <div style='border-left: 2px solid #00ffff; padding-left: 20px;'>
+                    <div style='color: #ffffff; font-size: 24px; font-weight: bold;'>
+                        {speed_value * 0.621371 if isinstance(speed_value, (int, float)) else 0:.1f}
+                    </div>
+                    <div style='color: #00ffff; font-size: 12px;'>MPH</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     gauge_col_left, gauge_col_right = st.columns(2)
 
     with gauge_col_left:
-        fig_rpm = go.Figure(
+        # Digital LED-Style RPM Display
+        rpm_display_value = rpm_value if latest_data is not None else 0
+        rpm_color = "#ff0000" if rpm_display_value > 2000 else "#ffff00" if rpm_display_value > 1000 else "#00ff00"
+
+        st.markdown(
+            f"""
+            <div style='text-align: center; background: #000000; border: 3px solid {rpm_color};
+                        border-radius: 10px; padding: 20px; margin: 10px 0;
+                        box-shadow: 0 0 20px {rpm_color};'>
+                <div style='color: {rpm_color}; font-family: "Digital-7", monospace;
+                            font-size: 48px; font-weight: bold;
+                            text-shadow: 0 0 10px {rpm_color}; letter-spacing: 3px;'>
+                    {rpm_display_value:04.0f}
+                </div>
+                <div style='color: {rpm_color}; font-size: 16px; font-family: "Orbitron", monospace;
+                            letter-spacing: 2px; margin-top: 5px;'>
+                    ▲ RPM ▲
+                </div>
+                <div style='margin-top: 10px;'>
+                    {'🔴' * int(rpm_display_value / 250) + '⚫' * (10 - int(rpm_display_value / 250))}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with gauge_col_right:
+        # Classic Speedometer-Style Throttle Gauge
+        fig_throttle = go.Figure(
             go.Indicator(
-                mode="gauge+number",
-                value=rpm_value if latest_data is not None else 0,
-                title={"text": "RPM"},
+                mode="gauge+number+delta",
+                value=throttle_value if latest_data is not None else 0,
+                title={"text": "Throttle Position", "font": {"size": 18, "color": "white"}},
+                number={"font": {"size": 28, "color": "white"}},
                 gauge={
-                    "axis": {"range": [0, 2500]},
-                    "bar": {"color": "orange"},
+                    "axis": {"range": [0, 100], "tickwidth": 2, "tickcolor": "white"},
+                    "bar": {"color": "rgba(255, 255, 255, 0.8)", "thickness": 0.8},
+                    "bgcolor": "rgba(0, 0, 0, 0.8)",
+                    "borderwidth": 3,
+                    "bordercolor": "gold",
                     "steps": [
-                        {"range": [0, 1000], "color": "lightgreen"},
-                        {"range": [1000, 2000], "color": "yellow"},
-                        {"range": [2000, 2500], "color": "red"},
+                        {"range": [0, 25], "color": "rgba(0, 255, 0, 0.3)"},
+                        {"range": [25, 50], "color": "rgba(255, 255, 0, 0.3)"},
+                        {"range": [50, 75], "color": "rgba(255, 165, 0, 0.3)"},
+                        {"range": [75, 100], "color": "rgba(255, 0, 0, 0.3)"},
                     ],
+                    "threshold": {
+                        "line": {"color": "red", "width": 4},
+                        "thickness": 0.75,
+                        "value": 90,
+                    },
                 },
             )
         )
-        st.plotly_chart(fig_rpm, use_container_width=True)
-
-    with gauge_col_right:
-        fig_throttle = go.Figure(
-            go.Indicator(
-                mode="gauge+number",
-                value=throttle_value if latest_data is not None else 0,
-                title={"text": "Throttle (%)"},
-                gauge={
-                    "axis": {"range": [0, 100]},
-                    "bar": {"color": "skyblue"},
-                },
-            )
+        fig_throttle.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": "white", "family": "Arial Black"},
         )
         st.plotly_chart(fig_throttle, use_container_width=True)
 
