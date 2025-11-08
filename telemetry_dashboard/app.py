@@ -1,5 +1,24 @@
-import streamlit as st
 import requests
+import time
+import streamlit as st
+from requests.exceptions import RequestException
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:  # Fallback if the helper is unavailable
+    def st_autorefresh(*_, **__):
+        return None
+
+
+def get_latest_data(base_url: str):
+    try:
+        response = requests.get(f"{base_url.rstrip('/')}/latest", timeout=5)
+        if response.ok:
+            return response.json()
+    except RequestException:
+        pass
+    except ValueError:
+        pass
+    return None
 
 st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
 
@@ -25,14 +44,41 @@ if check_health:
             status_placeholder.success("API is reachable.")
         else:
             status_placeholder.error(f"API responded with status {response.status_code}.")
-    except requests.RequestException as error:
+    except RequestException as error:
         status_placeholder.error(f"Connection failed: {error}")
 else:
     status_placeholder.info("Press the button to test the API.")
 
 with st.container():
     st.subheader("Live Data")
-    st.write("Coming soon...")
+    refresh_ms = max(int(refresh_rate * 1000), 1000)
+    st_autorefresh(interval=refresh_ms, key="refresh")
+    metric_placeholder = st.empty()
+    indicator_placeholder = st.empty()
+    timestamp_placeholder = st.empty()
+
+    latest_data = get_latest_data(base_url)
+
+    if latest_data is not None:
+        speed_value = latest_data.get("speed")
+        if isinstance(speed_value, (int, float)):
+            display_speed = f"{speed_value:.1f}"
+        else:
+            display_speed = "N/A"
+        metric_placeholder.metric(label="Speed (km/h)", value=display_speed)
+        indicator_placeholder.markdown("✅ Connected")
+        timestamp_placeholder.caption(f"Last update: {time.strftime('%H:%M:%S')}")
+    else:
+        metric_placeholder.metric(label="Speed (km/h)", value="—")
+        indicator_placeholder.markdown("❌ Disconnected")
+        timestamp_placeholder.caption("Last update: —")
+
+    with st.expander("Debug JSON"):
+        if latest_data is not None:
+            st.json(latest_data)
+        else:
+            st.write("No data received.")
+
 
 with st.container():
     st.subheader("Trip Monitor")
