@@ -5,7 +5,6 @@ import streamlit as st
 import requests
 from requests.exceptions import RequestException
 import plotly.graph_objects as go
-import math
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:  # Fallback if the helper is unavailable
@@ -13,7 +12,7 @@ except ImportError:  # Fallback if the helper is unavailable
         return None
 
 
-def get_latest_data(base_url: str):
+def _fetch_latest_data(base_url: str):
     try:
         response = requests.get(f"{base_url.rstrip('/')}/readings?limit=1", timeout=5)
         if response.ok:
@@ -77,7 +76,7 @@ def get_latest_data(base_url: str):
     return None, 0, 0, None, None, None, None
 
 
-def get_range_data(base_url: str, minutes: int):
+def _fetch_range_data(base_url: str, minutes: int):
     try:
         resp = requests.get(f"{base_url.rstrip('/')}/range?minutes={minutes}", timeout=5)
         if resp.status_code == 200:
@@ -86,7 +85,31 @@ def get_range_data(base_url: str, minutes: int):
     except RequestException:
         return None
 
-st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
+st.set_page_config(page_title="Telemetry Dashboard", layout="centered")
+
+
+def _get_cached_latest_fetcher(ttl_seconds: int):
+    cache_key = "latest_fetcher"
+    ttl_key = "latest_fetcher_ttl"
+    if (
+        cache_key not in st.session_state
+        or st.session_state.get(ttl_key) != ttl_seconds
+    ):
+        st.session_state[cache_key] = st.cache_data(ttl=ttl_seconds)(_fetch_latest_data)
+        st.session_state[ttl_key] = ttl_seconds
+    return st.session_state[cache_key]
+
+
+def _get_cached_range_fetcher(ttl_seconds: int):
+    cache_key = "range_fetcher"
+    ttl_key = "range_fetcher_ttl"
+    if (
+        cache_key not in st.session_state
+        or st.session_state.get(ttl_key) != ttl_seconds
+    ):
+        st.session_state[cache_key] = st.cache_data(ttl=ttl_seconds)(_fetch_range_data)
+        st.session_state[ttl_key] = ttl_seconds
+    return st.session_state[cache_key]
 
 if "trip_active" not in st.session_state:
     st.session_state.trip_active = False
@@ -105,7 +128,8 @@ st.markdown("---")
 
 st.sidebar.header("Connection Settings")
 base_url = st.sidebar.text_input("Base API URL", "http://127.0.0.1:8000")
-refresh_rate = st.sidebar.number_input("Refresh Rate (seconds)", min_value=1, value=3)
+refresh_rate = st.sidebar.number_input("Refresh Rate (seconds)", min_value=2, value=3)
+show_debug = st.sidebar.checkbox("Show Debug Panels")
 
 st.sidebar.subheader("Backend")
 check_health = st.sidebar.button("Check /health")
@@ -125,27 +149,44 @@ else:
 
 live_container = st.container()
 
-refresh_ms = max(int(refresh_rate * 1000), 1000)
+latest_fetcher = _get_cached_latest_fetcher(refresh_rate)
+range_fetcher = _get_cached_range_fetcher(refresh_rate)
+
+refresh_ms = max(int(refresh_rate * 1000), 2000)
 st_autorefresh(interval=refresh_ms, key="refresh")
 
-(
-    latest_data,
-    rpm_value,
-    throttle_value,
-    engine_load_value,
-    coolant_temp_value,
-    maf_value,
-    speed_value,
-) = get_latest_data(base_url)
+obd_error_message = None
+try:
+    (
+        latest_data,
+        rpm_value,
+        throttle_value,
+        engine_load_value,
+        coolant_temp_value,
+        maf_value,
+        speed_value,
+    ) = latest_fetcher(base_url)
+except RuntimeError as error:
+    obd_error_message = (
+        "Live OBD adapter is unavailable. Connect the adapter or install python-OBD."
+        f"\nDetails: {error}"
+    )
+    latest_data, rpm_value, throttle_value, engine_load_value = None, 0, 0, None
+    coolant_temp_value, maf_value, speed_value = None, None, None
 
 with live_container:
     st.markdown("### Live Data")
 
+    if obd_error_message:
+        st.error(obd_error_message)
+
     if latest_data is not None and isinstance(speed_value, (int, float)):
         speed_kmh = speed_value * 1.60934
         speed_display = f"{speed_kmh:.1f}"
+        mph_display = f"{speed_value:.1f}"
     else:
         speed_display = "—"
+        mph_display = "—"
 
     connection_text = "✅ Connected" if latest_data is not None else "❌ Disconnected"
     timestamp_text = (
@@ -176,9 +217,9 @@ with live_container:
                                 text-shadow: 0 0 10px #00ffff;'>{speed_display}</div>
                     <div style='color: #00ffff; font-size: 16px;'>KM/H</div>
                 </div>
-                <div style='border-left: 2px solid #00ffff; padding-left: 20px;'>
+                    <div style='border-left: 2px solid #00ffff; padding-left: 20px;'>
                     <div style='color: #ffffff; font-size: 24px; font-weight: bold;'>
-                        {speed_value * 0.621371 if isinstance(speed_value, (int, float)) else 0:.1f}
+                        {mph_display}
                     </div>
                     <div style='color: #00ffff; font-size: 12px;'>MPH</div>
                 </div>
@@ -282,16 +323,18 @@ with engine_container:
                 note_message = "Monitor cooling system."
             coolant_display = f"{coolant_temp_value:.1f}°F"
 
-    st.write(f"Engine Load: {load_display}")
+    metric_cols = st.columns(2)
+    metric_cols[0].metric("Engine Load", load_display)
+    metric_cols[1].metric("Coolant Temp", coolant_display)
     st.progress(load_progress)
 
     if coolant_display != "N/A":
+        st.markdown(f"Status: {coolant_state}", unsafe_allow_html=True)
+    else:
         st.markdown(
-            f"**Coolant Temp:** {coolant_display} — {coolant_state}",
+            "Status: <span style='color:gray;'>Waiting for coolant data.</span>",
             unsafe_allow_html=True,
         )
-    else:
-        st.markdown("**Coolant Temp:** N/A", unsafe_allow_html=True)
 
     st.caption(note_message)
 
@@ -305,10 +348,8 @@ with efficiency_container:
     maf_for_display = maf_value if isinstance(maf_value, (int, float)) else 0.0
     maf_progress = int(max(0, min((maf_for_display / 20) * 100, 100)))
 
-    if isinstance(maf_value, (int, float)):
-        st.write(f"Mass Airflow: {maf_for_display:.2f} g/s")
-    else:
-        st.write("Mass Airflow: N/A")
+    maf_label = f"{maf_for_display:.2f} g/s" if isinstance(maf_value, (int, float)) else "N/A"
+    st.metric("Mass Airflow", maf_label)
     st.progress(maf_progress)
 
     mpg_display = "N/A"
@@ -339,17 +380,18 @@ with efficiency_container:
         unsafe_allow_html=True,
     )
 
-    with st.expander("Efficiency Debug"):
-        speed_debug = (
-            f"{speed_value:.1f}" if isinstance(speed_value, (int, float)) else "N/A"
-        )
-        maf_debug = (
-            f"{maf_for_display:.2f}" if isinstance(maf_value, (int, float)) else "N/A"
-        )
-        mpg_debug = f"{mpg_est:.1f}" if mpg_est > 0 else "N/A"
-        st.write(f"Speed (mph): {speed_debug}")
-        st.write(f"Mass Airflow (g/s): {maf_debug}")
-        st.write(f"Estimated MPG: {mpg_debug}")
+    if show_debug:
+        with st.expander("Efficiency Debug"):
+            speed_debug = (
+                f"{speed_value:.1f}" if isinstance(speed_value, (int, float)) else "N/A"
+            )
+            maf_debug = (
+                f"{maf_for_display:.2f}" if isinstance(maf_value, (int, float)) else "N/A"
+            )
+            mpg_debug = f"{mpg_est:.1f}" if mpg_est > 0 else "N/A"
+            st.write(f"Speed (mph): {speed_debug}")
+            st.write(f"Mass Airflow (g/s): {maf_debug}")
+            st.write(f"Estimated MPG: {mpg_debug}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -430,7 +472,7 @@ with trip_container:
                 gridcolor="rgba(255,255,255,0.1)",
                 showgrid=True
             ),
-            height=250,
+            height=150,
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0.1)",
             font=dict(color="white"),
@@ -441,42 +483,54 @@ with trip_container:
     else:
         st.caption("Start a trip to see recent speed history.")
 
-st.markdown("### History")
-timeframe = st.selectbox("Select Time Range", ["Last 5 min", "Last 15 min", "Last 30 min", "Last 60 min"])
-window_minutes = int(timeframe.split()[1])
+st.markdown("<br>", unsafe_allow_html=True)
 
-history_df = get_range_data(base_url, window_minutes)
+history_container = st.container()
 
-if history_df is not None and not history_df.empty:
-    if "speed" not in history_df.columns and "speed_mph" in history_df.columns:
-        history_df["speed"] = history_df["speed_mph"]
-    if "coolant_temp_f" not in history_df.columns and "coolant_temp" in history_df.columns:
-        history_df["coolant_temp_f"] = history_df["coolant_temp"]
+with history_container:
+    st.markdown("### History")
+    timeframe = st.selectbox(
+        "Select Time Range", ["Last 5 min", "Last 15 min", "Last 30 min", "Last 60 min"]
+    )
+    window_minutes = int(timeframe.split()[1])
 
-    required_columns = {"timestamp", "speed", "rpm", "coolant_temp_f"}
+    history_df = range_fetcher(base_url, window_minutes)
 
-    if required_columns.issubset(history_df.columns):
-        history_df["timestamp"] = pd.to_datetime(history_df["timestamp"])
-        history_df.set_index("timestamp", inplace=True)
+    if history_df is not None and not history_df.empty:
+        history_view = history_df.copy()
+        if "speed" not in history_view.columns and "speed_mph" in history_view.columns:
+            history_view["speed"] = history_view["speed_mph"]
+        if (
+            "coolant_temp_f" not in history_view.columns
+            and "coolant_temp" in history_view.columns
+        ):
+            history_view["coolant_temp_f"] = history_view["coolant_temp"]
 
-        st.line_chart(history_df["speed"], height=150)
-        st.line_chart(history_df["rpm"], height=150)
-        st.line_chart(history_df["coolant_temp_f"], height=150)
+        required_columns = {"timestamp", "speed", "rpm", "coolant_temp_f"}
+
+        if required_columns.issubset(history_view.columns):
+            history_view["timestamp"] = pd.to_datetime(history_view["timestamp"])
+            history_view.set_index("timestamp", inplace=True)
+
+            st.line_chart(history_view["speed"], height=150)
+            st.line_chart(history_view["rpm"], height=150)
+            st.line_chart(history_view["coolant_temp_f"], height=150)
+        else:
+            st.warning("No data available for this range.")
     else:
         st.warning("No data available for this range.")
-else:
-    st.warning("No data available for this range.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-with st.expander("Debug JSON"):
-    if latest_data is not None:
-        st.json(latest_data)
-    else:
-        st.write("No data received.")
+if show_debug:
+    with st.expander("Debug JSON"):
+        if latest_data is not None:
+            st.json(latest_data)
+        else:
+            st.write("No data received.")
 
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
-    "<p style='text-align:center; font-size:12px;'>© 2025 Vehicle Telemetry Dashboard</p>",
+    "<p style='text-align:center; color:gray; font-size:12px;'>© 2025 Vehicle Telemetry Dashboard</p>",
     unsafe_allow_html=True,
 )
