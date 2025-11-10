@@ -1,27 +1,85 @@
 import time
-import pandas as pd
-import streamlit as st
+from typing import Any, Dict, Tuple
 
+import pandas as pd
+import plotly.graph_objects as go
 import requests
 from requests.exceptions import RequestException
-import plotly.graph_objects as go
-import math
+import streamlit as st
+
 try:
     from streamlit_autorefresh import st_autorefresh
-except ImportError:  # Fallback if the helper is unavailable
+except ImportError:  # pragma: no cover - helper might be missing on the Pi image
     def st_autorefresh(*_, **__):
         return None
 
 
-def get_latest_data(base_url: str):
+st.set_page_config(layout="centered", page_title="Telemetry Dashboard")
+
+# ---------------------------------------------------------------------------
+# Session defaults keep the trip tracker predictable across reruns.
+# ---------------------------------------------------------------------------
+if "trip_active" not in st.session_state:
+    st.session_state.trip_active = False
+if "trip_start_time" not in st.session_state:
+    st.session_state.trip_start_time = None
+if "trip_data" not in st.session_state:
+    st.session_state.trip_data = []
+if "distance_miles" not in st.session_state:
+    st.session_state.distance_miles = 0.0
+
+st.markdown("<h1 style='text-align:center;'>🚗 Vehicle Telemetry Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Sidebar controls focus on connection health and quick debugging toggles.
+# ---------------------------------------------------------------------------
+st.sidebar.header("Connection Settings")
+base_url = st.sidebar.text_input("Base API URL", "http://127.0.0.1:8000")
+refresh_rate = int(
+    st.sidebar.number_input(
+        "Refresh Rate (seconds)",
+        min_value=2,
+        value=3,
+        step=1,
+        help="Keep at least 2 seconds for smooth gauge animations.",
+    )
+)
+refresh_rate = max(refresh_rate, 2)
+show_debug_panels = st.sidebar.checkbox("Show Debug Panels", value=False)
+st.sidebar.caption("Debug tools are optional and safe to leave off for daily driving.")
+
+st.sidebar.subheader("Backend Tools")
+check_health = st.sidebar.button("Check /health")
+status_placeholder = st.sidebar.empty()
+if check_health:
+    try:
+        response = requests.get(f"{base_url.rstrip('/')}/health", timeout=5)
+        if response.ok:
+            status_placeholder.success("API is reachable.")
+        else:
+            status_placeholder.error(f"API responded with status {response.status_code}.")
+    except RequestException as error:
+        status_placeholder.error(f"Connection failed: {error}")
+else:
+    status_placeholder.info("Press the button to test the API.")
+
+# Cache lifetime mirrors the refresh rate so reruns feel steady on mobile.
+data_ttl = max(refresh_rate, 2)
+
+
+@st.cache_data(ttl=data_ttl)
+def get_latest_data(base_url: str) -> Tuple[Any, float, float, Any, Any, Any, Any]:
+    """Return the newest reading plus parsed helpers."""
+
     try:
         response = requests.get(f"{base_url.rstrip('/')}/readings?limit=1", timeout=5)
         if response.ok:
             data = response.json()
-            latest = None
+            latest: Dict[str, Any] | None = None
             if isinstance(data, dict):
                 latest = data
-            elif isinstance(data, list) and len(data) > 0:
+            elif isinstance(data, list) and data:
                 latest = data[0]
 
             if isinstance(latest, dict):
@@ -34,11 +92,8 @@ def get_latest_data(base_url: str):
 
                 if not isinstance(coolant_temp_value, (int, float)):
                     coolant_temp_value = latest.get("coolant_temp")
-
                 if not isinstance(speed_value, (int, float)):
                     speed_value = latest.get("speed")
-
-                # engine_load_value already set to load_pct above
 
                 if not isinstance(rpm_value, (int, float)):
                     rpm_value = 0
@@ -70,14 +125,16 @@ def get_latest_data(base_url: str):
                     maf_value,
                     speed_value,
                 )
-    except RequestException:
-        pass
-    except ValueError:
-        pass
-    return None, 0, 0, None, None, None, None
+            return None, 0, 0, None, None, None, None
+        raise RuntimeError(f"API responded with status {response.status_code}.")
+    except RequestException as exc:
+        raise RuntimeError("Could not reach the data source.") from exc
+    except ValueError as exc:
+        raise RuntimeError("Received malformed data from the API.") from exc
 
 
-def get_range_data(base_url: str, minutes: int):
+@st.cache_data(ttl=max(data_ttl * 2, data_ttl + 5))
+def get_range_data(base_url: str, minutes: int) -> pd.DataFrame | None:
     try:
         resp = requests.get(f"{base_url.rstrip('/')}/range?minutes={minutes}", timeout=5)
         if resp.status_code == 200:
@@ -85,100 +142,85 @@ def get_range_data(base_url: str, minutes: int):
         return None
     except RequestException:
         return None
+    except ValueError:
+        return None
 
-st.set_page_config(page_title="Vehicle Telemetry Dashboard", layout="wide")
 
-if "trip_active" not in st.session_state:
-    st.session_state.trip_active = False
-if "trip_start_time" not in st.session_state:
-    st.session_state.trip_start_time = None
-if "trip_data" not in st.session_state:
-    st.session_state.trip_data = []
-if "distance_miles" not in st.session_state:
-    st.session_state.distance_miles = 0.0
-
-st.markdown(
-    "<h1 style='text-align:center;'>🚗 Vehicle Telemetry Dashboard</h1>",
-    unsafe_allow_html=True,
-)
-st.markdown("---")
-
-st.sidebar.header("Connection Settings")
-base_url = st.sidebar.text_input("Base API URL", "http://127.0.0.1:8000")
-refresh_rate = st.sidebar.number_input("Refresh Rate (seconds)", min_value=1, value=3)
-
-st.sidebar.subheader("Backend")
-check_health = st.sidebar.button("Check /health")
-status_placeholder = st.sidebar.empty()
-
-if check_health:
-    try:
-        response = requests.get(f"{base_url.rstrip('/')}/health", timeout=5)
-        if response.ok:
-            status_placeholder.success("API is reachable.")
-        else:
-            status_placeholder.error(f"API responded with status {response.status_code}.")
-    except RequestException as error:
-        status_placeholder.error(f"Connection failed: {error}")
-else:
-    status_placeholder.info("Press the button to test the API.")
-
-live_container = st.container()
-
-refresh_ms = max(int(refresh_rate * 1000), 1000)
+refresh_ms = max(int(refresh_rate * 1000), 2000)
 st_autorefresh(interval=refresh_ms, key="refresh")
 
-(
-    latest_data,
-    rpm_value,
-    throttle_value,
-    engine_load_value,
-    coolant_temp_value,
-    maf_value,
-    speed_value,
-) = get_latest_data(base_url)
-
-with live_container:
-    st.markdown("### Live Data")
-
-    if latest_data is not None and isinstance(speed_value, (int, float)):
-        speed_kmh = speed_value * 1.60934
-        speed_display = f"{speed_kmh:.1f}"
-    else:
-        speed_display = "—"
-
-    connection_text = "✅ Connected" if latest_data is not None else "❌ Disconnected"
-    timestamp_text = (
-        f"Last update: {time.strftime('%H:%M:%S')}"
-        if latest_data is not None
-        else "Last update: —"
+error_message = None
+try:
+    (
+        latest_data,
+        rpm_value,
+        throttle_value,
+        engine_load_value,
+        coolant_temp_value,
+        maf_value,
+        speed_value,
+    ) = get_latest_data(base_url)
+except RuntimeError as exc:  # Handle missing python-OBD or API outages gracefully.
+    error_message = str(exc)
+    latest_data, rpm_value, throttle_value, engine_load_value, coolant_temp_value, maf_value, speed_value = (
+        None,
+        0,
+        0,
+        None,
+        None,
+        None,
+        None,
     )
 
-    status_cols = st.columns([1, 1])
-    with status_cols[0]:
-        st.markdown(connection_text)
-    with status_cols[1]:
-        st.caption(timestamp_text)
+live_container = st.container()
+with live_container:
+    st.markdown("### Live Data")
+    if error_message:
+        st.error(
+            "Live data source unavailable. Connect the adapter, install python-OBD, or verify the API before trying again.\n\n"
+            f"Details: {error_message}"
+        )
 
-    # Racing-Style HUD Speed Display
+    if latest_data is None and not error_message:
+        st.info("Waiting for the first reading. Check the adapter or API if this takes more than a few refreshes.")
+
+    connection_status = "✅ Connected" if latest_data is not None else "❌ Disconnected"
+    timestamp_text = (
+        f"Last update: {time.strftime('%H:%M:%S')}" if latest_data is not None else "Last update: —"
+    )
+    status_cols = st.columns(2)
+    status_cols[0].metric("Connection", connection_status)
+    status_cols[1].metric("Latest Refresh", timestamp_text)
+
+    speed_display = "—"
+    mph_display = "—"
+    if isinstance(speed_value, (int, float)):
+        mph_display = f"{speed_value:.1f}"
+        speed_kmh = speed_value * 1.60934
+        speed_display = f"{speed_kmh:.1f}"
+
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("Speed (mph)", mph_display)
+    metric_cols[1].metric("RPM", f"{int(rpm_value):,}" if rpm_value else "0")
+    metric_cols[2].metric("Throttle (%)", f"{throttle_value:.0f}")
+
     st.markdown(
         f"""
-        <div style='text-align: center; background: linear-gradient(45deg, #1e3c72, #2a5298);
-                    border-radius: 15px; padding: 20px; margin: 20px 0;
-                    box-shadow: 0 0 20px rgba(0,255,255,0.3);'>
-            <div style='color: #00ffff; font-family: "Orbitron", monospace; font-size: 14px;
-                        text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;'>
+        <div style='text-align: center; background: linear-gradient(45deg, #1e3c72, #2a5298); border-radius: 15px;
+                    padding: 16px; margin: 12px 0; box-shadow: 0 0 14px rgba(0,255,255,0.25);'>
+            <div style='color: #00ffff; font-family: "Orbitron", monospace; font-size: 12px; letter-spacing: 2px; margin-bottom: 6px;'>
                 🏁 SPEED TELEMETRY 🏁
             </div>
-            <div style='display: flex; justify-content: center; gap: 30px; align-items: center;'>
+            <div style='display: flex; justify-content: center; gap: 20px; align-items: center;'>
                 <div>
-                    <div style='color: #ffffff; font-size: 48px; font-weight: bold;
-                                text-shadow: 0 0 10px #00ffff;'>{speed_display}</div>
-                    <div style='color: #00ffff; font-size: 16px;'>KM/H</div>
+                    <div style='color: #ffffff; font-size: 40px; font-weight: bold; text-shadow: 0 0 10px #00ffff;'>
+                        {speed_display}
+                    </div>
+                    <div style='color: #00ffff; font-size: 14px;'>KM/H</div>
                 </div>
-                <div style='border-left: 2px solid #00ffff; padding-left: 20px;'>
-                    <div style='color: #ffffff; font-size: 24px; font-weight: bold;'>
-                        {speed_value * 0.621371 if isinstance(speed_value, (int, float)) else 0:.1f}
+                <div style='border-left: 2px solid #00ffff; padding-left: 16px;'>
+                    <div style='color: #ffffff; font-size: 22px; font-weight: bold;'>
+                        {mph_display}
                     </div>
                     <div style='color: #00ffff; font-size: 12px;'>MPH</div>
                 </div>
@@ -189,28 +231,22 @@ with live_container:
     )
 
     gauge_col_left, gauge_col_right = st.columns(2)
-
     with gauge_col_left:
-        # Digital LED-Style RPM Display
         rpm_display_value = rpm_value if latest_data is not None else 0
         rpm_color = "#ff0000" if rpm_display_value > 2000 else "#ffff00" if rpm_display_value > 1000 else "#00ff00"
-
         st.markdown(
             f"""
             <div style='text-align: center; background: #000000; border: 3px solid {rpm_color};
-                        border-radius: 10px; padding: 20px; margin: 10px 0;
-                        box-shadow: 0 0 20px {rpm_color};'>
-                <div style='color: {rpm_color}; font-family: "Digital-7", monospace;
-                            font-size: 48px; font-weight: bold;
+                        border-radius: 10px; padding: 18px; margin: 10px 0; box-shadow: 0 0 16px {rpm_color};'>
+                <div style='color: {rpm_color}; font-family: "Digital-7", monospace; font-size: 44px; font-weight: bold;
                             text-shadow: 0 0 10px {rpm_color}; letter-spacing: 3px;'>
                     {rpm_display_value:04.0f}
                 </div>
-                <div style='color: {rpm_color}; font-size: 16px; font-family: "Orbitron", monospace;
-                            letter-spacing: 2px; margin-top: 5px;'>
+                <div style='color: {rpm_color}; font-size: 15px; font-family: "Orbitron", monospace; letter-spacing: 2px; margin-top: 4px;'>
                     ▲ RPM ▲
                 </div>
-                <div style='margin-top: 10px;'>
-                    {'🔴' * int(rpm_display_value / 250) + '⚫' * (10 - int(rpm_display_value / 250))}
+                <div style='margin-top: 8px;'>
+                    {'🔴' * int(min(rpm_display_value / 250, 10)) + '⚫' * (10 - int(min(rpm_display_value / 250, 10)))}
                 </div>
             </div>
             """,
@@ -218,13 +254,12 @@ with live_container:
         )
 
     with gauge_col_right:
-        # Classic Speedometer-Style Throttle Gauge
         fig_throttle = go.Figure(
             go.Indicator(
                 mode="gauge+number+delta",
                 value=throttle_value if latest_data is not None else 0,
-                title={"text": "Throttle Position", "font": {"size": 18, "color": "white"}},
-                number={"font": {"size": 28, "color": "white"}},
+                title={"text": "Throttle Position", "font": {"size": 16, "color": "white"}},
+                number={"font": {"size": 24, "color": "white"}},
                 gauge={
                     "axis": {"range": [0, 100], "tickwidth": 2, "tickcolor": "white"},
                     "bar": {"color": "rgba(255, 255, 255, 0.8)", "thickness": 0.8},
@@ -249,13 +284,14 @@ with live_container:
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             font={"color": "white", "family": "Arial Black"},
+            margin=dict(l=20, r=20, t=30, b=20),
+            height=220,
         )
         st.plotly_chart(fig_throttle, use_container_width=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 engine_container = st.container()
-
 with engine_container:
     st.markdown("### Engine Health")
 
@@ -272,44 +308,39 @@ with engine_container:
 
         if isinstance(coolant_temp_value, (int, float)):
             if coolant_temp_value < 160:
-                coolant_state = "<span style='color:blue;'>🧊 Cool</span>"
+                coolant_state = "<span style='color:cornflowerblue;'>🧊 Cool</span>"
                 note_message = "Engine warming up."
             elif coolant_temp_value <= 210:
-                coolant_state = "<span style='color:green;'>✅ Normal</span>"
+                coolant_state = "<span style='color:lightgreen;'>✅ Normal</span>"
                 note_message = "Engine operating normally."
             else:
-                coolant_state = "<span style='color:red;'>🔥 Hot</span>"
+                coolant_state = "<span style='color:tomato;'>🔥 Hot</span>"
                 note_message = "Monitor cooling system."
             coolant_display = f"{coolant_temp_value:.1f}°F"
 
-    st.write(f"Engine Load: {load_display}")
+    metric_health = st.columns(2)
+    metric_health[0].metric("Engine Load", load_display)
+    metric_health[1].metric("Coolant Temp", coolant_display)
     st.progress(load_progress)
 
     if coolant_display != "N/A":
-        st.markdown(
-            f"**Coolant Temp:** {coolant_display} — {coolant_state}",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"**Coolant Status:** {coolant_state}", unsafe_allow_html=True)
     else:
-        st.markdown("**Coolant Temp:** N/A", unsafe_allow_html=True)
+        st.markdown("**Coolant Status:** N/A", unsafe_allow_html=True)
 
     st.caption(note_message)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 efficiency_container = st.container()
-
 with efficiency_container:
     st.markdown("### Efficiency Metrics")
 
     maf_for_display = maf_value if isinstance(maf_value, (int, float)) else 0.0
     maf_progress = int(max(0, min((maf_for_display / 20) * 100, 100)))
 
-    if isinstance(maf_value, (int, float)):
-        st.write(f"Mass Airflow: {maf_for_display:.2f} g/s")
-    else:
-        st.write("Mass Airflow: N/A")
-    st.progress(maf_progress)
+    efficiency_cols = st.columns(2)
+    efficiency_cols[0].metric("Mass Airflow (g/s)", f"{maf_for_display:.2f}" if maf_for_display else "N/A")
 
     mpg_display = "N/A"
     status_color = "gray"
@@ -324,37 +355,31 @@ with efficiency_container:
         mpg_est = speed_value / (maf_value * 0.08)
         mpg_display = f"{mpg_est:.1f}"
         if mpg_est > 30:
-            status_color = "green"
+            status_color = "lightgreen"
             status_note = "Efficient"
         elif mpg_est >= 15:
-            status_color = "orange"
+            status_color = "gold"
             status_note = "Average"
         else:
-            status_color = "red"
+            status_color = "tomato"
             status_note = "Inefficient"
 
-    st.metric(label="Estimated MPG", value=mpg_display)
-    st.markdown(
-        f"<span style='color:{status_color};'>Status: {status_note}</span>",
-        unsafe_allow_html=True,
-    )
+    efficiency_cols[1].metric("Estimated MPG", mpg_display)
+    st.progress(maf_progress)
+    st.markdown(f"<span style='color:{status_color};'>Status: {status_note}</span>", unsafe_allow_html=True)
 
-    with st.expander("Efficiency Debug"):
-        speed_debug = (
-            f"{speed_value:.1f}" if isinstance(speed_value, (int, float)) else "N/A"
-        )
-        maf_debug = (
-            f"{maf_for_display:.2f}" if isinstance(maf_value, (int, float)) else "N/A"
-        )
-        mpg_debug = f"{mpg_est:.1f}" if mpg_est > 0 else "N/A"
-        st.write(f"Speed (mph): {speed_debug}")
-        st.write(f"Mass Airflow (g/s): {maf_debug}")
-        st.write(f"Estimated MPG: {mpg_debug}")
+    if show_debug_panels:
+        with st.expander("Efficiency Debug"):
+            speed_debug = f"{speed_value:.1f}" if isinstance(speed_value, (int, float)) else "N/A"
+            maf_debug = f"{maf_for_display:.2f}" if isinstance(maf_value, (int, float)) else "N/A"
+            mpg_debug = f"{mpg_est:.1f}" if mpg_est > 0 else "N/A"
+            st.write(f"Speed (mph): {speed_debug}")
+            st.write(f"Mass Airflow (g/s): {maf_debug}")
+            st.write(f"Estimated MPG: {mpg_debug}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 trip_container = st.container()
-
 with trip_container:
     st.markdown("### Trip Monitor")
 
@@ -413,33 +438,27 @@ with trip_container:
                 y=df["speed"],
                 mode="lines",
                 name="Speed",
-                line=dict(color="#00ffff", width=2)
+                line=dict(color="#00ffff", width=2),
             )
         )
         fig_speed_history.update_layout(
             title="Speed History",
             xaxis_title="Time",
             yaxis_title="Speed (mph)",
-            yaxis=dict(
-                range=[0, 88],
-                dtick=10,
-                gridcolor="rgba(255,255,255,0.2)",
-                showgrid=True
-            ),
-            xaxis=dict(
-                gridcolor="rgba(255,255,255,0.1)",
-                showgrid=True
-            ),
-            height=250,
+            yaxis=dict(range=[0, 88], dtick=10, gridcolor="rgba(255,255,255,0.2)", showgrid=True),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.1)", showgrid=True),
+            height=140,
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0.1)",
             font=dict(color="white"),
             showlegend=False,
-            margin=dict(l=50, r=20, t=40, b=40)
+            margin=dict(l=40, r=20, t=40, b=30),
         )
         st.plotly_chart(fig_speed_history, use_container_width=True)
     else:
         st.caption("Start a trip to see recent speed history.")
+
+st.markdown("<br>", unsafe_allow_html=True)
 
 st.markdown("### History")
 timeframe = st.selectbox("Select Time Range", ["Last 5 min", "Last 15 min", "Last 30 min", "Last 60 min"])
@@ -459,24 +478,24 @@ if history_df is not None and not history_df.empty:
         history_df["timestamp"] = pd.to_datetime(history_df["timestamp"])
         history_df.set_index("timestamp", inplace=True)
 
-        st.line_chart(history_df["speed"], height=150)
-        st.line_chart(history_df["rpm"], height=150)
-        st.line_chart(history_df["coolant_temp_f"], height=150)
+        st.line_chart(history_df["speed"], height=140)
+        st.line_chart(history_df["rpm"], height=140)
+        st.line_chart(history_df["coolant_temp_f"], height=140)
     else:
         st.warning("No data available for this range.")
 else:
     st.warning("No data available for this range.")
 
-st.markdown("<br>", unsafe_allow_html=True)
-
-with st.expander("Debug JSON"):
-    if latest_data is not None:
-        st.json(latest_data)
-    else:
-        st.write("No data received.")
+if show_debug_panels:
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("Debug JSON"):
+        if latest_data is not None:
+            st.json(latest_data)
+        else:
+            st.write("No data received.")
 
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
-    "<p style='text-align:center; font-size:12px;'>© 2025 Vehicle Telemetry Dashboard</p>",
+    "<p style='text-align:center; color:gray; font-size:12px;'>© 2025 Vehicle Telemetry Dashboard</p>",
     unsafe_allow_html=True,
 )
