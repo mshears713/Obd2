@@ -1,0 +1,44 @@
+# Streamlit Dashboard Systemd Service
+# =====================================
+#
+# This service runs the Streamlit dashboard that displays
+# real-time OBD-II telemetry data.
+#
+# INSTALLATION:
+# -------------
+# 1. Copy this file to systemd directory:
+#    sudo cp streamlit-dashboard.service /etc/systemd/system/
+#
+# 2. Reload systemd to recognize the new service:
+#    sudo systemctl daemon-reload
+#
+# 3. Enable the service to start on boot:
+#    sudo systemctl enable streamlit-dashboard.service
+#
+# 4. Start the service now:
+#    sudo systemctl start streamlit-dashboard.service
+#
+# MANAGEMENT:
+# -----------
+# Check status:  sudo systemctl status streamlit-dashboard.service
+# View logs:     sudo journalctl -u streamlit-dashboard.service -f
+# Stop service:  sudo systemctl stop streamlit-dashboard.service
+# Restart:       sudo systemctl restart streamlit-dashboard.service
+
+[Unit]
+Description=Streamlit OBD Dashboard
+After=network.target obd-api.service
+Wants=obd-api.service
+
+[Service]
+Type=simple
+User=mshears
+WorkingDirectory=/home/mshears/Desktop/Obd2API/telemetry_dashboard
+ExecStart=/usr/bin/python3 -m streamlit run app.py --server.port 8501
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -645,6 +645,120 @@ def trip_summary(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/obd/status")
+def get_obd_status():
+    """
+    Get the current OBD connection status by checking systemd service logs.
+    Returns whether the system is using real or simulated data.
+    """
+    import subprocess
+
+    try:
+        # Check recent logs for connection status (last 15 minutes)
+        result = subprocess.run(
+            ["journalctl", "-u", "obd-reader.service", "--since", "15 minutes ago", "--no-pager"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        logs = result.stdout
+
+        # Check for indicators of real vs simulated mode
+        # Find the LAST occurrence of each status to determine current mode
+        logs_lower = logs.lower()
+
+        # Find positions of status messages
+        last_simulation_idx = logs_lower.rfind("simulation mode")
+        last_connected_idx = logs_lower.rfind("connected!")
+
+        # Determine current mode based on most recent message
+        if last_connected_idx > last_simulation_idx and last_connected_idx != -1:
+            # Connected message is more recent
+            mode = "real"
+            connected = True
+            # Extract protocol info if available
+            for line in logs.split('\n'):
+                if "Protocol:" in line or "protocol:" in line.lower():
+                    protocol = line.split("Protocol:")[-1].strip() if "Protocol:" in line else line.split("protocol:")[-1].strip()
+                    break
+            else:
+                protocol = "Unknown"
+        elif last_simulation_idx != -1:
+            # Simulation mode message found
+            mode = "simulated"
+            connected = False
+            protocol = None
+        else:
+            # No clear status found
+            mode = "unknown"
+            connected = False
+            protocol = None
+
+        return {
+            "connected": connected,
+            "mode": mode,
+            "protocol": protocol if mode == "real" else None,
+            "service_running": True
+        }
+    except Exception as e:
+        return {
+            "connected": False,
+            "mode": "unknown",
+            "error": str(e),
+            "service_running": False
+        }
+
+
+@app.post("/obd/reconnect")
+def reconnect_obd():
+    """
+    Attempt to reconnect to the real OBD adapter by restarting the OBD reader service.
+    """
+    import subprocess
+
+    try:
+        # First, try to bind the Bluetooth adapter
+        subprocess.run(
+            ["sudo", "rfcomm", "bind", "0", "00:1D:A5:09:2E:B3", "1"],
+            capture_output=True,
+            timeout=5
+        )
+
+        # Restart the OBD reader service
+        result = subprocess.run(
+            ["sudo", "systemctl", "restart", "obd-reader.service"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode == 0:
+            # Wait a moment for service to initialize
+            import time
+            time.sleep(2)
+
+            # Check the new status
+            status_result = subprocess.run(
+                ["journalctl", "-u", "obd-reader.service", "-n", "20", "--no-pager"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            logs = status_result.stdout
+            if "Connected!" in logs:
+                return {"success": True, "message": "Successfully reconnected to OBD adapter", "mode": "real"}
+            elif "simulation mode" in logs.lower():
+                return {"success": False, "message": "OBD adapter not detected, using simulation mode", "mode": "simulated"}
+            else:
+                return {"success": False, "message": "Service restarted but status unclear", "mode": "unknown"}
+        else:
+            return {"success": False, "message": "Failed to restart OBD service", "error": result.stderr}
+    except Exception as e:
+        return {"success": False, "message": "Error during reconnection attempt", "error": str(e)}
+
+
 # Run the server when this file is executed directly
 if __name__ == "__main__":
     import uvicorn

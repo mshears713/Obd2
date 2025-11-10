@@ -154,6 +154,31 @@ st.markdown(
     "<h1 style='text-align:center;'>🚗 Vehicle Telemetry Dashboard</h1>",
     unsafe_allow_html=True,
 )
+
+# Main page OBD status indicator
+try:
+    status_response = requests.get(f"http://127.0.0.1:8000/obd/status", timeout=2)
+    if status_response.ok:
+        status_data = status_response.json()
+        if status_data.get("mode") == "real":
+            st.markdown(
+                "<div style='text-align:center; padding: 10px; background: linear-gradient(90deg, #00ff00, #00cc00); border-radius: 10px; margin: 10px auto; max-width: 400px;'>"
+                "<strong style='color: #000; font-size: 18px;'>🟢 LIVE DATA FROM VEHICLE</strong>"
+                f"<br><span style='color: #003300; font-size: 12px;'>Protocol: {status_data.get('protocol', 'Unknown')}</span>"
+                "</div>",
+                unsafe_allow_html=True
+            )
+        elif status_data.get("mode") == "simulated":
+            st.markdown(
+                "<div style='text-align:center; padding: 10px; background: linear-gradient(90deg, #ffaa00, #ff8800); border-radius: 10px; margin: 10px auto; max-width: 400px;'>"
+                "<strong style='color: #000; font-size: 18px;'>🟡 SIMULATED DATA</strong>"
+                "<br><span style='color: #331100; font-size: 12px;'>OBD adapter not connected</span>"
+                "</div>",
+                unsafe_allow_html=True
+            )
+except:
+    pass
+
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -185,6 +210,51 @@ if data_source == "FastAPI (network)" and check_health:
         status_placeholder.error(f"Connection failed: {error}")
 elif data_source == "FastAPI (network)":
     status_placeholder.info("Press the button to test the API.")
+
+# OBD Connection Status
+st.sidebar.markdown("---")
+st.sidebar.subheader("OBD Connection")
+
+# Get OBD status
+obd_status = None
+try:
+    response = requests.get(f"{base_url.rstrip('/')}/obd/status", timeout=5)
+    if response.ok:
+        obd_status = response.json()
+except:
+    pass
+
+# Display status
+if obd_status:
+    if obd_status.get("mode") == "real":
+        st.sidebar.success("🟢 Real OBD Data")
+        if obd_status.get("protocol"):
+            st.sidebar.caption(f"Protocol: {obd_status['protocol']}")
+    elif obd_status.get("mode") == "simulated":
+        st.sidebar.warning("🟡 Simulated Data")
+        st.sidebar.caption("OBD adapter not connected")
+    else:
+        st.sidebar.error("🔴 Status Unknown")
+else:
+    st.sidebar.info("Status unavailable")
+
+# Reconnect button
+if st.sidebar.button("🔄 Reconnect to OBD"):
+    with st.spinner("Attempting to reconnect..."):
+        try:
+            response = requests.post(f"{base_url.rstrip('/')}/obd/reconnect", timeout=15)
+            if response.ok:
+                result = response.json()
+                if result.get("success"):
+                    st.sidebar.success(result.get("message", "Reconnected!"))
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.sidebar.error(result.get("message", "Reconnection failed"))
+            else:
+                st.sidebar.error("Reconnection request failed")
+        except Exception as e:
+            st.sidebar.error(f"Error: {str(e)}")
 else:
     status_placeholder.info("OBD checks run locally on the Pi.")
 
@@ -259,11 +329,6 @@ with live_container:
         status_display = "⚠️ Adapter issue"
     else:
         status_display = "⏳ Waiting"
-
-    status_cols = st.columns([1, 1])
-    status_cols[0].metric("Source", source_label)
-    status_cols[1].metric("Status", status_display)
-    st.caption(f"Last update: {timestamp_display}")
 
     st.markdown(
         f"""
@@ -582,6 +647,15 @@ if show_debug:
             st.json(latest_data)
         else:
             st.write("No data received.")
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# Data Source and Status at bottom
+st.markdown("---")
+status_cols = st.columns([1, 1, 1])
+status_cols[0].metric("Source", source_label)
+status_cols[1].metric("Status", status_display)
+status_cols[2].metric("Last Update", timestamp_display)
 
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
