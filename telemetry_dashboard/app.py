@@ -1,5 +1,8 @@
 import streamlit as st
 import time
+import platform
+import socket
+import psutil
 from typing import Dict, Optional, Tuple
 
 import pandas as pd
@@ -32,7 +35,7 @@ if "refresh_ttl" not in st.session_state:
     st.session_state.refresh_ttl = 3
 
 
-REFRESH_TTL = max(2, int(st.session_state.refresh_ttl))
+REFRESH_TTL = max(3, int(st.session_state.refresh_ttl))
 
 
 @st.cache_data(ttl=REFRESH_TTL, show_spinner=False)
@@ -238,8 +241,8 @@ st.markdown(padding, unsafe_allow_html=True)
 
 st.sidebar.header("Connection Settings")
 base_url = st.sidebar.text_input("Base API URL", "http://127.0.0.1:8000")
-refresh_rate = st.sidebar.number_input("Refresh Rate (seconds)", min_value=2, value=3, step=1)
-st.session_state.refresh_ttl = max(2, int(refresh_rate))
+refresh_rate = st.sidebar.number_input("Refresh Rate (seconds)", min_value=3, value=3, step=1)
+st.session_state.refresh_ttl = max(3, int(refresh_rate))
 
 st.sidebar.subheader("Data Source")
 data_source = st.sidebar.selectbox(
@@ -698,6 +701,55 @@ if history_df is not None and not history_df.empty:
         st.warning("No data available for this range.")
 else:
     st.warning("No data available for this range.")
+
+st.markdown(padding, unsafe_allow_html=True)
+
+cpu_percent = psutil.cpu_percent(interval=1)
+mem = psutil.virtual_memory()
+uptime = time.time() - psutil.boot_time()
+hostname = socket.gethostname()
+os_name = platform.system()
+
+backend_health_data = None
+backend_health_message = "Backend Unreachable ⚠️"
+
+base_url_clean = base_url.strip()
+if base_url_clean:
+    try:
+        health_response = requests.get(f"{base_url_clean.rstrip('/')}/health", timeout=3)
+        if health_response.ok:
+            try:
+                backend_health_data = health_response.json()
+                backend_health_message = ""
+            except ValueError:
+                backend_health_message = "Backend returned invalid JSON."
+        else:
+            backend_health_message = f"Backend responded with status {health_response.status_code}."
+    except RequestException:
+        backend_health_message = "Backend Unreachable ⚠️"
+else:
+    backend_health_message = "Set a valid API URL to check backend health."
+
+with st.expander("System Health"):
+    st.markdown("### ⚙️ System Diagnostics")
+    diag_cols = st.columns(3)
+    diag_cols[0].metric("CPU Usage", f"{cpu_percent:.1f}%")
+    diag_cols[1].metric("Memory Usage", f"{mem.percent:.1f}%")
+    diag_cols[2].metric("Uptime (min)", f"{uptime / 60:.1f}")
+
+    st.caption(f"Host: {hostname} · OS: {os_name}")
+
+    if backend_health_data is not None:
+        st.json(backend_health_data)
+    elif backend_health_message:
+        st.warning(backend_health_message)
+
+    if cpu_percent > 80:
+        st.warning("⚠️ High CPU usage on Raspberry Pi.")
+    if mem.percent > 90:
+        st.error("🧠 Memory critically low — consider restarting backend.")
+    if uptime > 86400:
+        st.info("💡 System has been up for over 24 hours — reboot recommended soon.")
 
 st.markdown(padding, unsafe_allow_html=True)
 
