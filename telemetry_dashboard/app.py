@@ -1,9 +1,9 @@
+import streamlit as st
 import time
 from typing import Dict, Optional, Tuple
 
 import pandas as pd
 import requests
-import streamlit as st
 from requests.exceptions import RequestException
 import plotly.graph_objects as go
 try:
@@ -154,6 +154,42 @@ def get_live_obd_data() -> Tuple[Optional[Dict[str, float]], float, float, Optio
     )
 
 
+def generate_insights(data):
+    insights = []
+
+    # Safety and operational thresholds
+    rpm = data.get("rpm", 0)
+    speed = data.get("speed", 0)
+    throttle = data.get("throttle", 0)
+    engine_load = data.get("engine_load", 0)
+    coolant = data.get("coolant_temp_f", 0)
+    mpg = data.get("mpg_est", 0)
+
+    # Rule 1: Overheating
+    if coolant > 220:
+        insights.append(("⚠️ Engine overheating!", "Check coolant system immediately."))
+    elif coolant < 150:
+        insights.append(("🧊 Engine cold", "Coolant below optimal temperature range."))
+
+    # Rule 2: Excessive RPM
+    if rpm > 4000:
+        insights.append(("🔴 High RPM detected", "Consider easing throttle to prevent wear."))
+
+    # Rule 3: Inefficiency warning
+    if mpg < 15 and speed > 30:
+        insights.append(("⛽ Poor fuel efficiency", "Vehicle operating inefficiently under current load."))
+
+    # Rule 4: Idle anomaly
+    if rpm < 800 and throttle > 10:
+        insights.append(("⚙️ Possible idle issue", "Throttle input with low RPM — check airflow sensors."))
+
+    # Rule 5: Everything nominal
+    if not insights:
+        insights.append(("✅ All systems normal", "Engine performance within expected range."))
+
+    return insights
+
+
 if "trip_active" not in st.session_state:
     st.session_state.trip_active = False
 if "trip_start_time" not in st.session_state:
@@ -212,6 +248,7 @@ data_source = st.sidebar.selectbox(
     help="Use FastAPI while developing without the adapter.",
 )
 show_debug = st.sidebar.checkbox("Show Debug Panels")
+show_insights = st.sidebar.checkbox("Show Insights", value=True)
 
 st.sidebar.subheader("Backend")
 check_health = st.sidebar.button("Check /health")
@@ -488,6 +525,14 @@ st.markdown(padding, unsafe_allow_html=True)
 
 efficiency_container = st.container()
 
+mpg_estimate = None
+if (
+    isinstance(maf_value, (int, float))
+    and maf_value > 0
+    and isinstance(speed_value, (int, float))
+):
+    mpg_estimate = speed_value / (maf_value * 0.08)
+
 with efficiency_container:
     st.markdown("### Efficiency Metrics")
 
@@ -497,19 +542,12 @@ with efficiency_container:
     mpg_display = "N/A"
     status_color = "gray"
     status_note = "Data needed"
-    mpg_est = 0.0
-
-    if (
-        isinstance(maf_value, (int, float))
-        and maf_value > 0
-        and isinstance(speed_value, (int, float))
-    ):
-        mpg_est = speed_value / (maf_value * 0.08)
-        mpg_display = f"{mpg_est:.1f}"
-        if mpg_est > 30:
+    if isinstance(mpg_estimate, (int, float)):
+        mpg_display = f"{mpg_estimate:.1f}"
+        if mpg_estimate > 30:
             status_color = "green"
             status_note = "Efficient"
-        elif mpg_est >= 15:
+        elif mpg_estimate >= 15:
             status_color = "orange"
             status_note = "Average"
         else:
@@ -535,7 +573,11 @@ with efficiency_container:
             maf_debug = (
                 f"{maf_for_display:.2f}" if isinstance(maf_value, (int, float)) else "N/A"
             )
-            mpg_debug = f"{mpg_est:.1f}" if mpg_est > 0 else "N/A"
+            mpg_debug = (
+                f"{mpg_estimate:.1f}"
+                if isinstance(mpg_estimate, (int, float)) and mpg_estimate > 0
+                else "N/A"
+            )
             st.write(f"Speed (mph): {speed_debug}")
             st.write(f"Mass Airflow (g/s): {maf_debug}")
             st.write(f"Estimated MPG: {mpg_debug}")
@@ -658,6 +700,24 @@ else:
     st.warning("No data available for this range.")
 
 st.markdown(padding, unsafe_allow_html=True)
+
+if show_insights:
+    st.markdown("### 🧠 System Insights")
+
+    insight_payload = {
+        "rpm": rpm_value if isinstance(rpm_value, (int, float)) else 0,
+        "speed": speed_value if isinstance(speed_value, (int, float)) else 0,
+        "throttle": throttle_value if isinstance(throttle_value, (int, float)) else 0,
+        "engine_load": engine_load_value if isinstance(engine_load_value, (int, float)) else 0,
+        "coolant_temp_f": coolant_temp_value if isinstance(coolant_temp_value, (int, float)) else 0,
+        "mpg_est": mpg_estimate if isinstance(mpg_estimate, (int, float)) else 0,
+    }
+
+    insights = generate_insights(insight_payload)
+    for title, detail in insights:
+        st.info(f"**{title}** — {detail}")
+
+    st.markdown(padding, unsafe_allow_html=True)
 
 if show_debug:
     with st.expander("Debug JSON"):
