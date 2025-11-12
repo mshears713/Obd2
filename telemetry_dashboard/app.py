@@ -15,6 +15,19 @@ except ImportError:  # Fallback if the helper is unavailable
 
 st.set_page_config(layout="centered", page_title="Telemetry Dashboard")
 
+tv_mode = st.sidebar.toggle("🖥️ TV Mode", value=False)
+
+if tv_mode:
+    gauge_height = 350
+    font_size = "22px"
+    chart_height = 250
+    padding = "<br><br>"
+else:
+    gauge_height = 200
+    font_size = "16px"
+    chart_height = 150
+    padding = "<br>"
+
 if "refresh_ttl" not in st.session_state:
     st.session_state.refresh_ttl = 3
 
@@ -151,9 +164,14 @@ if "distance_miles" not in st.session_state:
     st.session_state.distance_miles = 0.0
 
 st.markdown(
-    "<h1 style='text-align:center;'>🚗 Vehicle Telemetry Dashboard</h1>",
+    f"<h1 style='text-align:center; font-size:{font_size};'>🚗 Vehicle Telemetry Dashboard</h1>",
     unsafe_allow_html=True,
 )
+
+if tv_mode:
+    st.success("TV Mode Active — Display optimized for large screens.")
+
+st.markdown(padding, unsafe_allow_html=True)
 
 # Main page OBD status indicator
 try:
@@ -180,7 +198,7 @@ except:
     pass
 
 st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(padding, unsafe_allow_html=True)
 
 st.sidebar.header("Connection Settings")
 base_url = st.sidebar.text_input("Base API URL", "http://127.0.0.1:8000")
@@ -334,8 +352,8 @@ with live_container:
         f"""
         <div style='text-align: center; background: linear-gradient(135deg, rgba(46,139,87,0.35), rgba(14,17,23,0.95));
                     border-radius: 16px; padding: 16px; margin: 10px 0;
-                    box-shadow: 0 6px 20px rgba(0,0,0,0.35);'>
-            <div style='color: #8EF9D0; font-family: "Orbitron", monospace; font-size: 12px;
+                    box-shadow: 0 6px 20px rgba(0,0,0,0.35); font-size: {font_size};'>
+            <div style='color: #8EF9D0; font-family: "Orbitron", monospace; font-size: 0.75em;
                         text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px;'>
                 🏁 Speed Telemetry
             </div>
@@ -347,17 +365,17 @@ with live_container:
                     <div style='color: #8EF9D0; font-size: 14px;'>KM/H</div>
                 </div>
                 <div style='border-left: 1px solid rgba(143, 249, 208, 0.4); padding-left: 16px;'>
-                    <div style='color: #FAFAFA; font-size: 22px; font-weight: bold;'>
+                    <div style='color: #FAFAFA; font-size: 1.2em; font-weight: bold;'>
                         {mph_display}
                     </div>
-                    <div style='color: #8EF9D0; font-size: 12px;'>MPH</div>
+                    <div style='color: #8EF9D0; font-size: 0.75em;'>MPH</div>
                 </div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(padding, unsafe_allow_html=True)
 
     gauge_col_left, gauge_col_right = st.columns(2)
 
@@ -373,11 +391,11 @@ with live_container:
                         border-radius: 12px; padding: 16px; margin: 10px 0;
                         box-shadow: 0 8px 16px rgba(0,0,0,0.35);'>
                 <div style='color: {rpm_color}; font-family: "Digital-7", monospace;
-                            font-size: 40px; font-weight: bold;
+                            font-size: {1.8 if tv_mode else 1.4}em; font-weight: bold;
                             letter-spacing: 3px;'>
                     {rpm_display_value:04.0f}
                 </div>
-                <div style='color: {rpm_color}; font-size: 16px; font-family: "Orbitron", monospace;
+                <div style='color: {rpm_color}; font-size: {1.0 if tv_mode else 0.85}em; font-family: "Orbitron", monospace;
                             letter-spacing: 2px; margin-top: 5px;'>
                     ▲ RPM ▲
                 </div>
@@ -421,12 +439,12 @@ with live_container:
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             font={"color": "white", "family": "Arial Black"},
-            height=220,
+            height=gauge_height,
             margin=dict(l=10, r=10, t=30, b=10),
         )
         st.plotly_chart(fig_throttle, use_container_width=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(padding, unsafe_allow_html=True)
 
 engine_container = st.container()
 
@@ -466,7 +484,7 @@ with engine_container:
 
     st.caption(note_message)
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(padding, unsafe_allow_html=True)
 
 efficiency_container = st.container()
 
@@ -522,7 +540,7 @@ with efficiency_container:
             st.write(f"Mass Airflow (g/s): {maf_debug}")
             st.write(f"Estimated MPG: {mpg_debug}")
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(padding, unsafe_allow_html=True)
 
 trip_container = st.container()
 
@@ -601,7 +619,7 @@ with trip_container:
                 gridcolor="rgba(255,255,255,0.1)",
                 showgrid=True
             ),
-            height=150,
+            height=chart_height,
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0.1)",
             font=dict(color="white"),
@@ -612,7 +630,7 @@ with trip_container:
     else:
         st.caption("Start a trip to see recent speed history.")
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(padding, unsafe_allow_html=True)
 st.markdown("### History")
 timeframe = st.selectbox("Select Time Range", ["Last 5 min", "Last 15 min", "Last 30 min", "Last 60 min"])
 window_minutes = int(timeframe.split()[1])
@@ -631,15 +649,15 @@ if history_df is not None and not history_df.empty:
         history_df["timestamp"] = pd.to_datetime(history_df["timestamp"])
         history_df.set_index("timestamp", inplace=True)
 
-        st.line_chart(history_df["speed"], height=150)
-        st.line_chart(history_df["rpm"], height=150)
-        st.line_chart(history_df["coolant_temp_f"], height=150)
+        st.line_chart(history_df["speed"], height=chart_height)
+        st.line_chart(history_df["rpm"], height=chart_height)
+        st.line_chart(history_df["coolant_temp_f"], height=chart_height)
     else:
         st.warning("No data available for this range.")
 else:
     st.warning("No data available for this range.")
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(padding, unsafe_allow_html=True)
 
 if show_debug:
     with st.expander("Debug JSON"):
@@ -648,7 +666,7 @@ if show_debug:
         else:
             st.write("No data received.")
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(padding, unsafe_allow_html=True)
 
 # Data Source and Status at bottom
 st.markdown("---")
